@@ -1,0 +1,11 @@
+{
+  "port": 8756,
+  "music_folders": [
+    "C:\\Users\\basva\\Music"
+  ],
+  "speakers": [
+    { "name": "Living Room (Arc Ultra)", "ip": "192.168.1.6" },
+    { "name": "Bedroom (Era 100)", "ip": "192.168.1.37" },
+    { "name": "Kitchen (Era 100)", "ip": "192.168.1.18" }
+  ]
+}
