@@ -26,6 +26,15 @@ MIME_BY_EXT = {
 COVER_NAMES = ("cover.jpg", "cover.png", "folder.jpg", "folder.png",
                "front.jpg", "album.jpg", "albumart.jpg")
 
+IMAGE_EXTS = {".jpg", ".jpeg", ".png", ".webp"}
+
+IMAGE_MIMES = {
+    ".jpg": "image/jpeg",
+    ".jpeg": "image/jpeg",
+    ".png": "image/png",
+    ".webp": "image/webp",
+}
+
 
 def _track_id(path: str) -> str:
     return hashlib.sha1(path.encode("utf-8", "surrogatepass")).hexdigest()[:16]
@@ -161,6 +170,13 @@ def extract_art(track_path: str) -> tuple[bytes, str] | None:
         if cover.exists():
             mime = "image/png" if cover.suffix.lower() == ".png" else "image/jpeg"
             return cover.read_bytes(), mime
+    # Fallback: any image in the album folder — largest file wins, so real
+    # covers beat thumbnails like AlbumArtSmall.jpg.
+    candidates = [p for p in path.parent.iterdir()
+                  if p.is_file() and p.suffix.lower() in IMAGE_EXTS]
+    if candidates:
+        best = max(candidates, key=lambda p: p.stat().st_size)
+        return best.read_bytes(), IMAGE_MIMES[best.suffix.lower()]
     return None
 
 
