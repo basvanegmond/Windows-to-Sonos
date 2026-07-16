@@ -78,6 +78,21 @@ New-NetFirewallRule -DisplayName "Windows-to-Sonos" -Direction Inbound `
 Add more folders or speakers and restart the server (or use **Rescan
 Library** in the sidebar for new music).
 
+## Auto-start on login
+
+To have the server start automatically and restart itself if it ever
+crashes, register a Windows Scheduled Task once:
+
+```powershell
+cd Windows-to-Sonos
+.\setup_autostart.ps1
+```
+
+This runs `run_server.bat` at logon and retries automatically on failure.
+Startup crashes are logged to `logs\server.log` (there's no terminal to read
+them from once the server runs this way). Remove it later with
+`Unregister-ScheduledTask -TaskName "Windows-to-Sonos"`.
+
 ## Lossless & hi-res
 
 FLAC and WAV stream bit-perfect up to Sonos's ceiling of **24-bit/48kHz**.
@@ -93,3 +108,4 @@ in `.cache/transcode/`, so it only happens the first time you play a track.
 | Speaker "unreachable" in the sidebar | Confirm its IP in `config.json` — Sonos IPs can change unless you reserve them in your router (recommended) |
 | New music missing | Sidebar → Rescan Library |
 | Wrong laptop IP after switching networks | Restart the server — the LAN IP is auto-detected at startup |
+| Everything fails at once ("Failed to fetch" on every action, not just YouTube) | The server process itself isn't running/listening — check `logs\server.log` for a startup crash traceback, then restart it |

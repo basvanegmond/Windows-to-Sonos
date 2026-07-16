@@ -28,12 +28,26 @@ def lan_ip_towards(speaker_ip: str) -> str:
         s.close()
 
 
+def _detect_server_ip(speakers: list[dict]) -> str:
+    """Try every configured speaker until one gives us a routable LAN IP.
+    A single unreachable speaker (network switch, VPN, speaker offline) must
+    never crash the whole server at startup — fall back to 127.0.0.1 instead
+    (streaming to Sonos won't work until the network is back, but the web UI
+    and local playback still come up)."""
+    for cfg in speakers:
+        try:
+            return lan_ip_towards(cfg["ip"])
+        except OSError:
+            continue
+    return "127.0.0.1"
+
+
 class SonosController:
     def __init__(self, speakers: list[dict], server_port: int):
         self.configured = speakers  # [{name, ip}]
         self.server_port = server_port
         self._devices: dict[str, soco.SoCo] = {}
-        self.server_ip = lan_ip_towards(speakers[0]["ip"]) if speakers else "127.0.0.1"
+        self.server_ip = _detect_server_ip(speakers) if speakers else "127.0.0.1"
 
     def device(self, ip: str) -> soco.SoCo:
         if ip not in self._devices:

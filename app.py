@@ -339,11 +339,24 @@ app.mount("/", StaticFiles(directory=BASE_DIR / "static", html=True), name="stat
 
 
 if __name__ == "__main__":
-    print("Scanning music library...")
-    library.scan()
-    print(f"  {len(library.tracks)} tracks in {len(library.albums)} albums")
-    # Advertise 127.0.0.1, not localhost: on Windows "localhost" resolves to
-    # IPv6 ::1 first and stalls ~2s per request against this IPv4-only server.
-    print(f"Serving on http://{sonos.server_ip}:{config['port']}  "
-          f"(open http://127.0.0.1:{config['port']} in your browser)")
-    uvicorn.run(app, host="0.0.0.0", port=config["port"], log_level="warning")
+    try:
+        print("Scanning music library...")
+        library.scan()
+        print(f"  {len(library.tracks)} tracks in {len(library.albums)} albums")
+        # Advertise 127.0.0.1, not localhost: on Windows "localhost" resolves to
+        # IPv6 ::1 first and stalls ~2s per request against this IPv4-only server.
+        print(f"Serving on http://{sonos.server_ip}:{config['port']}  "
+              f"(open http://127.0.0.1:{config['port']} in your browser)")
+        uvicorn.run(app, host="0.0.0.0", port=config["port"], log_level="warning")
+    except Exception:
+        # No terminal to read this from once the server runs headless via
+        # Task Scheduler, so persist the traceback before exiting non-zero
+        # (a non-zero exit is what triggers Task Scheduler's restart policy).
+        import datetime
+        import traceback
+        log_dir = BASE_DIR / "logs"
+        log_dir.mkdir(exist_ok=True)
+        with (log_dir / "server.log").open("a", encoding="utf-8") as f:
+            f.write(f"\n[{datetime.datetime.now().isoformat()}] CRASHED:\n")
+            f.write(traceback.format_exc())
+        raise
