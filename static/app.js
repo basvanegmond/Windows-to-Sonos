@@ -203,6 +203,14 @@ function renderContent() {
     renderAllTracks(content);
     return;
   }
+  if (state.view === "yt-favs") {
+    renderYtFavourites(content);
+    return;
+  }
+  if (state.view === "radio") {
+    renderRadio(content);
+    return;
+  }
   renderAlbumGrid(content);
 }
 
@@ -581,7 +589,7 @@ function wireControls() {
 
   $("search").addEventListener("input", (e) => {
     state.search = e.target.value.trim();
-    renderContent();
+    if (state.view !== "yt-favs" && state.view !== "radio") renderContent();
   });
 
   wireYouTube();
@@ -724,6 +732,232 @@ function updateMiniPlayer(pb) {
   }
 }
 
+/* ---------- youtube favourites view ---------- */
+
+const HEART_OUTLINE = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M20.84 4.61a5.5 5.5 0 0 0-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 0 0-7.78 7.78l1.06 1.06L12 21.23l7.78-7.78 1.06-1.06a5.5 5.5 0 0 0 0-7.78z"/></svg>`;
+const HEART_FILLED = `<svg viewBox="0 0 24 24" fill="currentColor" stroke="none"><path d="M20.84 4.61a5.5 5.5 0 0 0-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 0 0-7.78 7.78l1.06 1.06L12 21.23l7.78-7.78 1.06-1.06a5.5 5.5 0 0 0 0-7.78z"/></svg>`;
+
+async function renderYtFavourites(content) {
+  $("view-title").textContent = "YT Favourites";
+  content.innerHTML = "";
+
+  let items = [];
+  try {
+    items = (await api("/api/youtube/favourites")).items;
+  } catch (e) {
+    if (state.view !== "yt-favs") return;
+    content.innerHTML = `<div class="empty-state"><p>Could not load: ${esc(e.message)}</p></div>`;
+    return;
+  }
+  if (state.view !== "yt-favs") return;
+
+  if (!items.length) {
+    content.innerHTML = `<div class="empty-state">
+      ${HEART_OUTLINE}
+      <p>No favourites yet.<br>Open the YouTube overlay and click ♥ on a video to save it here.</p>
+    </div>`;
+    return;
+  }
+
+  const list = document.createElement("div");
+  list.className = "yt-fav-list";
+  for (const item of items) {
+    const el = document.createElement("div");
+    el.className = "yt-fav-row";
+    el.innerHTML = `
+      <img class="yt-fav-thumb" src="/art/yt-${esc(item.videoId)}" alt="" onerror="this.style.visibility='hidden'">
+      <div class="yt-fav-meta">
+        <div class="yt-fav-title">${esc(item.title)}</div>
+        <div class="yt-fav-sub mono">${esc(item.uploader)} &middot; ${fmtTime(item.duration)}</div>
+      </div>
+      <div class="yt-fav-actions">
+        <button class="btn btn-primary btn-sm" data-act="play">${PLAY_SVG} Play</button>
+        <button class="icon-btn" title="Add to queue" data-act="queue">${ADD_SVG}</button>
+        <button class="icon-btn fav-btn on" title="Remove from favourites" data-act="unfav">${HEART_FILLED}</button>
+      </div>
+    `;
+    el.querySelector('[data-act="play"]').addEventListener("click", () => playTracks([item.trackId]));
+    el.querySelector('[data-act="queue"]').addEventListener("click", () => addToQueue([item.trackId]));
+    el.querySelector('[data-act="unfav"]').addEventListener("click", async () => {
+      try {
+        await api(`/api/youtube/${encodeURIComponent(item.videoId)}/favourite`, undefined, "DELETE");
+        toast("Removed from favourites");
+        if (state.view === "yt-favs") renderYtFavourites($("content"));
+      } catch (e) { toast(e.message, true); }
+    });
+    list.appendChild(el);
+  }
+  content.appendChild(list);
+}
+
+/* ---------- radio view ---------- */
+
+const RADIO_SVG = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M4.9 19.1C1 15.2 1 8.8 4.9 4.9"/><path d="M7.8 16.2c-2.3-2.3-2.3-6.1 0-8.5"/><circle cx="12" cy="12" r="2"/><path d="M16.2 7.8c2.3 2.3 2.3 6.1 0 8.5"/><path d="M19.1 4.9C23 8.8 23 15.1 19.1 19"/></svg>`;
+const EDIT_SVG = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/></svg>`;
+const TRASH_SVG = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg>`;
+
+const _BRAND_GRADIENTS = {
+  qmusic:          "linear-gradient(135deg, hsl(2, 94%, 48%), hsl(356, 96%, 36%))",
+  sublime:         "linear-gradient(135deg, hsl(161, 36%, 28%), hsl(155, 46%, 18%))",
+  radio538:        "linear-gradient(135deg, hsl(276, 95%, 50%), hsl(280, 100%, 38%))",
+  skyradio:        "linear-gradient(135deg, hsl(210, 86%, 42%), hsl(214, 92%, 29%))",
+  "skyradio-xmas": "linear-gradient(135deg, hsl(4, 88%, 44%), hsl(0, 92%, 33%))",
+};
+
+function stationGradient(id, name) {
+  if (_BRAND_GRADIENTS[id]) return _BRAND_GRADIENTS[id];
+  let h = 0;
+  for (let i = 0; i < name.length; i++) h = (h * 31 + name.charCodeAt(i)) & 0x7fffffff;
+  const hue = h % 360;
+  return `linear-gradient(135deg, hsl(${hue}, 52%, 36%), hsl(${(hue + 28) % 360}, 58%, 26%))`;
+}
+
+function stationInitials(name) {
+  const s = name.replace(/^(radio|the)\s+/i, "").trim();
+  const w = (s.match(/[A-Za-z0-9]+/) || [s])[0];
+  return w.slice(0, 3).toUpperCase();
+}
+
+async function renderRadio(content) {
+  $("view-title").textContent = "Radio";
+  content.innerHTML = "";
+
+  let editingId = null;
+
+  // Add button
+  const addBtn = document.createElement("button");
+  addBtn.className = "btn btn-ghost radio-add-btn";
+  addBtn.innerHTML = `${ADD_SVG} Add Station`;
+
+  // Inline form (hidden by default)
+  const form = document.createElement("div");
+  form.className = "radio-form";
+  form.hidden = true;
+  form.innerHTML = `
+    <input type="text" class="radio-input" placeholder="Station name" autocomplete="off">
+    <input type="url" class="radio-input radio-url-input" placeholder="Stream URL (.mp3 / .aac / .m3u)" autocomplete="off" spellcheck="false">
+    <button class="btn btn-primary btn-sm">Save</button>
+    <button class="btn btn-ghost btn-sm">Cancel</button>
+  `;
+
+  content.appendChild(addBtn);
+  content.appendChild(form);
+
+  const nameInput = form.querySelectorAll("input")[0];
+  const urlInput = form.querySelectorAll("input")[1];
+  const saveBtn = form.querySelector(".btn-primary");
+  const cancelBtn = form.querySelector(".btn-ghost");
+
+  function openForm(station = null) {
+    editingId = station ? station.id : null;
+    nameInput.value = station ? station.name : "";
+    urlInput.value = station ? station.url : "";
+    addBtn.hidden = true;
+    form.hidden = false;
+    nameInput.focus();
+  }
+
+  function closeForm() {
+    form.hidden = true;
+    addBtn.hidden = false;
+    editingId = null;
+  }
+
+  addBtn.addEventListener("click", () => openForm());
+  cancelBtn.addEventListener("click", closeForm);
+  [nameInput, urlInput].forEach((inp) => {
+    inp.addEventListener("keydown", (e) => { if (e.key === "Enter") saveBtn.click(); });
+  });
+
+  saveBtn.addEventListener("click", async () => {
+    const name = nameInput.value.trim();
+    const url = urlInput.value.trim();
+    if (!name || !url) { toast("Station name and URL are required", true); return; }
+    try {
+      if (editingId) {
+        await api(`/api/radio/${encodeURIComponent(editingId)}`, { name, url }, "PUT");
+        toast(`Updated: ${name}`);
+      } else {
+        await api("/api/radio", { name, url });
+        toast(`Added: ${name}`);
+      }
+      renderRadio($("content"));
+    } catch (e) { toast(e.message, true); }
+  });
+
+  // Fetch stations
+  let stations = [];
+  try {
+    stations = (await api("/api/radio")).stations;
+  } catch (e) {
+    if (state.view !== "radio") return;
+    const err = document.createElement("div");
+    err.className = "empty-state";
+    err.innerHTML = `<p>Could not load stations: ${esc(e.message)}</p>`;
+    content.appendChild(err);
+    return;
+  }
+  if (state.view !== "radio") return;
+
+  if (!stations.length) {
+    const empty = document.createElement("div");
+    empty.className = "empty-state";
+    empty.innerHTML = `${RADIO_SVG}<p>No stations yet.<br>Click "Add Station" above to add an internet radio stream.</p>`;
+    content.appendChild(empty);
+    return;
+  }
+
+  const grid = document.createElement("div");
+  grid.className = "radio-grid";
+
+  stations.forEach((station, i) => {
+    const card = document.createElement("div");
+    card.className = "radio-card";
+    card.style.setProperty("--i", Math.min(i, 20));
+    const initials = stationInitials(station.name);
+    card.innerHTML = `
+      <div class="radio-cover" style="background: ${stationGradient(station.id, station.name)}">
+        <svg class="radio-cover-waves" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1">
+          <path d="M4.9 19.1C1 15.2 1 8.8 4.9 4.9"/><path d="M7.8 16.2c-2.3-2.3-2.3-6.1 0-8.5"/>
+          <circle cx="12" cy="12" r="2"/><path d="M16.2 7.8c2.3 2.3 2.3 6.1 0 8.5"/>
+          <path d="M19.1 4.9C23 8.8 23 15.1 19.1 19"/>
+        </svg>
+        <span class="radio-initials">${esc(initials)}</span>
+        <button class="cover-play" title="Play ${esc(station.name)}">${PLAY_SVG}</button>
+        <div class="radio-card-menu">
+          <button class="radio-menu-btn" title="Edit">${EDIT_SVG}</button>
+          <button class="radio-menu-btn" title="Delete">${TRASH_SVG}</button>
+        </div>
+      </div>
+      <span class="album-title">${esc(station.name)}</span>
+    `;
+    card.querySelector(".cover-play").addEventListener("click", async (e) => {
+      e.stopPropagation();
+      if (!requireSpeaker()) return;
+      try {
+        await api(`/api/radio/${encodeURIComponent(station.id)}/play`, { ip: coordinator() });
+        toast(`Playing: ${station.name}`);
+        pollState(true);
+      } catch (err) { toast(err.message, true); }
+    });
+    const [editBtn, delBtn] = card.querySelectorAll(".radio-menu-btn");
+    editBtn.addEventListener("click", (e) => {
+      e.stopPropagation();
+      openForm(station);
+      form.scrollIntoView({ behavior: "smooth", block: "start" });
+    });
+    delBtn.addEventListener("click", async (e) => {
+      e.stopPropagation();
+      try {
+        await api(`/api/radio/${encodeURIComponent(station.id)}`, undefined, "DELETE");
+        renderRadio($("content"));
+      } catch (err) { toast(err.message, true); }
+    });
+    grid.appendChild(card);
+  });
+  content.appendChild(grid);
+}
+
 /* ---------- youtube overlay ---------- */
 
 const SPINNER = `<svg class="spin" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 12a9 9 0 1 1-6.2-8.56"/></svg>`;
@@ -805,6 +1039,7 @@ async function refreshYtList() {
   for (const item of items) {
     const el = document.createElement("div");
     el.className = "yt-item";
+    const isFav = !!item.isFavourite;
     el.innerHTML = `
       <img class="yt-thumb" src="/art/yt-${esc(item.videoId)}" alt="" onerror="this.style.visibility='hidden'">
       <div class="yt-meta">
@@ -814,13 +1049,29 @@ async function refreshYtList() {
       <div class="yt-actions">
         <button class="icon-btn" title="Play" data-act="play">${PLAY_SVG}</button>
         <button class="icon-btn" title="Add to queue" data-act="queue">${ADD_SVG}</button>
-        <button class="icon-btn" title="Remove from cache" data-act="del">
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg>
-        </button>
+        <button class="icon-btn fav-btn${isFav ? " on" : ""}" title="${isFav ? "Remove from" : "Add to"} favourites" data-act="fav">${isFav ? HEART_FILLED : HEART_OUTLINE}</button>
+        <button class="icon-btn" title="Remove from cache" data-act="del">${TRASH_SVG}</button>
       </div>
     `;
     el.querySelector('[data-act="play"]').addEventListener("click", () => playTracks([item.trackId]));
     el.querySelector('[data-act="queue"]').addEventListener("click", () => addToQueue([item.trackId]));
+    el.querySelector('[data-act="fav"]').addEventListener("click", async (e) => {
+      const btn = e.currentTarget;
+      const nowFav = btn.classList.contains("on");
+      try {
+        if (nowFav) {
+          await api(`/api/youtube/${encodeURIComponent(item.videoId)}/favourite`, undefined, "DELETE");
+          btn.classList.remove("on");
+          btn.title = "Add to favourites";
+          btn.innerHTML = HEART_OUTLINE;
+        } else {
+          await api(`/api/youtube/${encodeURIComponent(item.videoId)}/favourite`, null, "POST");
+          btn.classList.add("on");
+          btn.title = "Remove from favourites";
+          btn.innerHTML = HEART_FILLED;
+        }
+      } catch (e) { toast(e.message, true); }
+    });
     el.querySelector('[data-act="del"]').addEventListener("click", async () => {
       try {
         await api(`/api/youtube/${encodeURIComponent(item.videoId)}`, undefined, "DELETE");

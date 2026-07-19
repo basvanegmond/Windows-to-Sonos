@@ -11,6 +11,7 @@ from fastapi.responses import FileResponse, JSONResponse, Response, StreamingRes
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
+import radio as radio_mod
 import youtube
 from library import Library, Track
 from sonos_ctl import SonosController
@@ -88,6 +89,20 @@ class YouTubeRequest(BaseModel):
 class QueueJumpRequest(BaseModel):
     ip: str
     index: int
+
+
+class RadioAddRequest(BaseModel):
+    name: str
+    url: str
+
+
+class RadioUpdateRequest(BaseModel):
+    name: str
+    url: str
+
+
+class RadioPlayRequest(BaseModel):
+    ip: str
 
 
 def _tracks_with_album(track_ids: list[str]):
@@ -230,9 +245,30 @@ def youtube_fetch(req: YouTubeRequest):
     return {"ok": True, "item": item.to_dict()}
 
 
+@app.get("/api/youtube/favourites")
+def youtube_list_favs():
+    favs = youtube.favourites_set()
+    return {"items": [{**i.to_dict(), "isFavourite": True} for i in youtube.list_favourites()]}
+
+
 @app.get("/api/youtube")
 def youtube_list():
-    return {"items": [i.to_dict() for i in youtube.list_items()]}
+    favs = youtube.favourites_set()
+    return {"items": [{**i.to_dict(), "isFavourite": i.video_id in favs} for i in youtube.list_items()]}
+
+
+@app.post("/api/youtube/{video_id}/favourite")
+def youtube_add_fav(video_id: str):
+    if f"yt{video_id}" not in yt_tracks:
+        raise HTTPException(404, "Video not in cache")
+    youtube.add_favourite(video_id)
+    return {"ok": True}
+
+
+@app.delete("/api/youtube/{video_id}/favourite")
+def youtube_remove_fav(video_id: str):
+    youtube.remove_favourite(video_id)
+    return {"ok": True}
 
 
 @app.delete("/api/youtube/{video_id}")
@@ -331,6 +367,48 @@ def state(ip: str):
         return sonos.state(ip)
     except Exception as exc:
         return JSONResponse({"error": str(exc)}, status_code=502)
+
+
+# ---------- radio ----------
+
+@app.get("/api/radio")
+def radio_list():
+    return {"stations": radio_mod.load()}
+
+
+@app.post("/api/radio")
+def radio_add(req: RadioAddRequest):
+    if not req.name.strip() or not req.url.strip():
+        raise HTTPException(400, "Name and URL are required")
+    station = radio_mod.add(req.name.strip(), req.url.strip())
+    return {"ok": True, "station": station}
+
+
+@app.put("/api/radio/{station_id}")
+def radio_update(station_id: str, req: RadioUpdateRequest):
+    if not req.name.strip() or not req.url.strip():
+        raise HTTPException(400, "Name and URL are required")
+    station = radio_mod.update(station_id, req.name.strip(), req.url.strip())
+    if not station:
+        raise HTTPException(404, "Station not found")
+    return {"ok": True, "station": station}
+
+
+@app.delete("/api/radio/{station_id}")
+def radio_remove(station_id: str):
+    if not radio_mod.remove(station_id):
+        raise HTTPException(404, "Station not found")
+    return {"ok": True}
+
+
+@app.post("/api/radio/{station_id}/play")
+def radio_play(station_id: str, req: RadioPlayRequest):
+    stations = radio_mod.load()
+    station = next((s for s in stations if s["id"] == station_id), None)
+    if not station:
+        raise HTTPException(404, "Station not found")
+    _sonos_call(sonos.play_radio, req.ip, station["url"], station["name"])
+    return {"ok": True}
 
 
 # ---------- frontend ----------

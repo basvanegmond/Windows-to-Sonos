@@ -15,6 +15,7 @@ import yt_dlp
 from library import Track
 
 YT_CACHE = Path(__file__).parent / ".cache" / "youtube"
+FAVS_PATH = Path(__file__).parent / "youtube_favourites.json"
 
 _locks: dict[str, threading.Lock] = {}
 _locks_guard = threading.Lock()
@@ -180,6 +181,48 @@ def remux_faststart(path: Path) -> None:
         tmp.unlink(missing_ok=True)
 
 
+def _load_favs() -> set[str]:
+    if not FAVS_PATH.exists():
+        return set()
+    try:
+        return set(json.loads(FAVS_PATH.read_text(encoding="utf-8")).get("video_ids", []))
+    except Exception:
+        return set()
+
+
+def _save_favs(favs: set[str]) -> None:
+    FAVS_PATH.write_text(
+        json.dumps({"video_ids": sorted(favs)}, ensure_ascii=False, indent=2),
+        encoding="utf-8",
+    )
+
+
+def favourites_set() -> set[str]:
+    return _load_favs()
+
+
+def is_favourite(video_id: str) -> bool:
+    return video_id in _load_favs()
+
+
+def add_favourite(video_id: str) -> None:
+    favs = _load_favs()
+    favs.add(video_id)
+    _save_favs(favs)
+
+
+def remove_favourite(video_id: str) -> None:
+    favs = _load_favs()
+    favs.discard(video_id)
+    _save_favs(favs)
+
+
+def list_favourites() -> list[YouTubeItem]:
+    """Cached items that are marked as favourites, newest first."""
+    favs = _load_favs()
+    return [item for item in list_items() if item.video_id in favs]
+
+
 def list_items() -> list[YouTubeItem]:
     if not YT_CACHE.exists():
         return []
@@ -193,6 +236,7 @@ def list_items() -> list[YouTubeItem]:
 
 
 def delete(video_id: str) -> bool:
+    remove_favourite(video_id)
     found = False
     for suffix in (".m4a", ".jpg", ".json", ".webp", ".part"):
         p = YT_CACHE / f"{video_id}{suffix}"

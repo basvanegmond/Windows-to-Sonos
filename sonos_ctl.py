@@ -239,6 +239,11 @@ class SonosController:
             "repeat": mode in ("REPEAT_ALL", "SHUFFLE", "REPEAT_ONE"),
         }
 
+    def play_radio(self, ip: str, url: str, title: str) -> None:
+        """Play an internet radio stream URI directly (bypasses the track queue)."""
+        dev = self.coordinator_of(ip)
+        dev.play_uri(uri=url, title=title, force_radio=True)
+
     def queue(self, ip: str) -> list[dict]:
         dev = self.coordinator_of(ip)
         items = []
