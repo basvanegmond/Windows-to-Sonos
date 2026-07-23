@@ -1,3 +1,2 @@
 @echo off
-cd /d "%~dp0"
-"%~dp0.venv\Scripts\python.exe" app.py
+wscript.exe //B "%~dp0run_server.vbs"

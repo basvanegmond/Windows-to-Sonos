@@ -23,5 +23,15 @@
     "id": "skyradio-xmas",
     "name": "Skyradio Christmas",
     "url": "https://playerservices.streamtheworld.com/api/livestream-redirect/SKYCHRISTMAS.mp3"
+  },
+  {
+    "id": "f237010e",
+    "name": "Qmusic 80s & 90s",
+    "url": "https://stream.qmusic.nl/90s-00s/mp3"
+  },
+  {
+    "id": "518b9686",
+    "name": "Qmusic Foute Uur",
+    "url": "https://audio-streaming.qmusic.nl/Qmusic_nl_fouteuur.mp3"
   }
 ]
