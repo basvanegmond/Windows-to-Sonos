@@ -373,7 +373,7 @@ async function playAlbum(album, { startIndex = 0, shuffle = false } = {}) {
 async function playTracks(trackIds, startIndex = 0, shuffle = false) {
   if (!requireSpeaker()) return;
   try {
-    await api("/api/play", { ip: coordinator(), trackIds, startIndex });
+    await api("/api/play", { ip: coordinator(), trackIds, startIndex, groupIps: state.selected });
     if (shuffle) {
       await api("/api/playmode", { ip: coordinator(), shuffle: true, repeat: state.playback?.repeat ?? false });
     }
@@ -594,6 +594,7 @@ function wireControls() {
 
   wireYouTube();
   wireMiniPlayer();
+  wireVolumeOverlay();
 
   const drawer = $("queue-drawer");
   $("queue-toggle").addEventListener("click", () => {
@@ -729,6 +730,65 @@ function updateMiniPlayer(pb) {
     get("m-title").textContent = "Nothing playing";
     get("m-artist").textContent = "";
     get("m-fill").style.width = "0%";
+  }
+}
+
+/* ---------- volume overlay ---------- */
+
+function wireVolumeOverlay() {
+  const overlay = $("vol-overlay");
+  const btn = $("vol-toggle");
+
+  const close = () => { overlay.hidden = true; };
+  const open = () => {
+    renderVolumeOverlay();
+    overlay.hidden = false;
+  };
+
+  btn.addEventListener("click", (e) => {
+    e.stopPropagation();
+    overlay.hidden ? open() : close();
+  });
+  $("vol-overlay-close").addEventListener("click", close);
+
+  document.addEventListener("click", (e) => {
+    if (!overlay.hidden && !overlay.contains(e.target) && e.target !== btn) close();
+  });
+  document.addEventListener("keydown", (e) => {
+    if (e.key === "Escape" && !overlay.hidden) close();
+  });
+}
+
+function renderVolumeOverlay() {
+  const container = $("vol-overlay-speakers");
+  container.innerHTML = "";
+  const reachable = state.speakers.filter((s) => s.reachable);
+  if (!reachable.length) {
+    container.innerHTML = `<div style="font-size:12px;color:var(--text-faint)">No reachable speakers</div>`;
+    return;
+  }
+  for (const sp of reachable) {
+    const row = document.createElement("div");
+    row.className = "vol-ov-row";
+    const vol = sp.volume ?? 0;
+    row.innerHTML = `
+      <div class="vol-ov-label">
+        <span class="vol-ov-name">${esc(sp.name)}</span>
+        <span class="vol-ov-val mono">${vol}</span>
+      </div>
+      <input type="range" class="vol-ov-slider" min="0" max="100" value="${vol}">
+    `;
+    const slider = row.querySelector(".vol-ov-slider");
+    const valEl = row.querySelector(".vol-ov-val");
+    slider.addEventListener("input", () => { valEl.textContent = slider.value; });
+    slider.addEventListener("change", async () => {
+      const v = Number(slider.value);
+      sp.volume = v;
+      try { await api("/api/volume", { ip: sp.ip, volume: v }); }
+      catch (e) { toast(e.message, true); }
+      renderSpeakers();
+    });
+    container.appendChild(row);
   }
 }
 
@@ -931,15 +991,17 @@ async function renderRadio(content) {
       </div>
       <span class="album-title">${esc(station.name)}</span>
     `;
-    card.querySelector(".cover-play").addEventListener("click", async (e) => {
+    const playStation = async (e) => {
       e.stopPropagation();
       if (!requireSpeaker()) return;
       try {
-        await api(`/api/radio/${encodeURIComponent(station.id)}/play`, { ip: coordinator() });
+        await api(`/api/radio/${encodeURIComponent(station.id)}/play`, { ip: coordinator(), groupIps: state.selected });
         toast(`Playing: ${station.name}`);
         pollState(true);
       } catch (err) { toast(err.message, true); }
-    });
+    };
+    card.querySelector(".cover-play").addEventListener("click", playStation);
+    card.addEventListener("click", playStation);
     const [editBtn, delBtn] = card.querySelectorAll(".radio-menu-btn");
     editBtn.addEventListener("click", (e) => {
       e.stopPropagation();
@@ -953,6 +1015,7 @@ async function renderRadio(content) {
         renderRadio($("content"));
       } catch (err) { toast(err.message, true); }
     });
+    card.querySelector(".radio-card-menu").addEventListener("click", (e) => e.stopPropagation());
     grid.appendChild(card);
   });
   content.appendChild(grid);
@@ -979,6 +1042,7 @@ function wireYouTube() {
 
   $("yt-play").addEventListener("click", () => submitYt(false));
   $("yt-queue-add").addEventListener("click", () => submitYt(true));
+  $("yt-fav-add").addEventListener("click", () => submitYtFav());
   $("yt-url").addEventListener("keydown", (e) => {
     if (e.key === "Enter") submitYt(false);
   });
@@ -995,7 +1059,7 @@ async function submitYt(addToQueue) {
   btn.disabled = true;
   setYtStatus("Fetching audio — first time takes a few seconds…");
   try {
-    const res = await api("/api/youtube", { url, ip: coordinator(), addToQueue });
+    const res = await api("/api/youtube", { url, ip: coordinator(), addToQueue, groupIps: state.selected });
     ytDurations.set(res.item.trackId, res.item.duration);
     setYtStatus("");
     input.value = "";
@@ -1004,6 +1068,33 @@ async function submitYt(addToQueue) {
       : `Playing: ${res.item.title}`);
     refreshYtList();
     pollState(true);
+  } catch (e) {
+    setYtStatus(e.message, true);
+  } finally {
+    btn.innerHTML = original;
+    btn.disabled = false;
+  }
+}
+
+async function submitYtFav() {
+  const input = $("yt-url");
+  const url = input.value.trim();
+  if (!url) { setYtStatus("Paste a YouTube URL first", true); return; }
+  const btn = $("yt-fav-add");
+  const original = btn.innerHTML;
+  btn.innerHTML = `${SPINNER} Fetching`;
+  btn.disabled = true;
+  setYtStatus("Fetching metadata — this may take a few seconds…");
+  try {
+    // Fetch the video (no speaker needed — omit ip so backend only downloads).
+    const res = await api("/api/youtube/fetch", { url });
+    ytDurations.set(res.item.trackId, res.item.duration);
+    // Mark as favourite.
+    await api(`/api/youtube/${encodeURIComponent(res.item.videoId)}/favourite`, null, "POST");
+    setYtStatus("");
+    input.value = "";
+    toast(`Added to favourites: ${res.item.title}`);
+    refreshYtList();
   } catch (e) {
     setYtStatus(e.message, true);
   } finally {
@@ -1103,6 +1194,7 @@ async function loadSpeakers() {
     state.speakers = res.speakers;
     $("server-info").textContent = `serving ${res.serverIp}`;
     renderSpeakers();
+    if (!$("vol-overlay").hidden) renderVolumeOverlay();
   } catch (e) {
     toast("Could not load speakers: " + e.message, true);
   }

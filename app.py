@@ -42,6 +42,7 @@ class PlayRequest(BaseModel):
     ip: str
     trackIds: list[str]
     startIndex: int = 0
+    groupIps: list[str] = []  # all selected IPs; used to re-enforce group before play
 
 
 class QueueAddRequest(BaseModel):
@@ -84,6 +85,10 @@ class YouTubeRequest(BaseModel):
     url: str
     ip: str | None = None       # if set, play immediately on this speaker
     addToQueue: bool = False    # if set (with ip), enqueue instead of replace
+    groupIps: list[str] = []   # all selected IPs; used to re-enforce group before play
+
+class YouTubeFetchRequest(BaseModel):
+    url: str
 
 
 class QueueJumpRequest(BaseModel):
@@ -103,6 +108,7 @@ class RadioUpdateRequest(BaseModel):
 
 class RadioPlayRequest(BaseModel):
     ip: str
+    groupIps: list[str] = []
 
 
 def _tracks_with_album(track_ids: list[str]):
@@ -237,11 +243,25 @@ def youtube_fetch(req: YouTubeRequest):
         raise HTTPException(502, f"YouTube fetch failed: {exc}") from exc
     yt_tracks[item.track_id] = item.to_track()
     if req.ip:
+        group_ips = req.groupIps or [req.ip]
+        if len(group_ips) > 1:
+            _sonos_call(sonos.form_group, group_ips)
         pair = [(yt_tracks[item.track_id], f"yt-{item.video_id}")]
         if req.addToQueue:
             _sonos_call(sonos.add_to_queue, req.ip, pair)
         else:
             _sonos_call(sonos.play_tracks, req.ip, pair, 0)
+    return {"ok": True, "item": item.to_dict()}
+
+
+@app.post("/api/youtube/fetch")
+def youtube_fetch_only(req: YouTubeFetchRequest):
+    """Fetch/cache a YouTube video without playing it (for pre-adding to favourites)."""
+    try:
+        item = youtube.fetch(req.url)
+    except Exception as exc:
+        raise HTTPException(502, f"YouTube fetch failed: {exc}") from exc
+    yt_tracks[item.track_id] = item.to_track()
     return {"ok": True, "item": item.to_dict()}
 
 
@@ -296,6 +316,11 @@ def group(req: GroupRequest):
 
 @app.post("/api/play")
 def play(req: PlayRequest):
+    # Re-enforce speaker grouping before play so members that drifted (e.g.
+    # after a speaker restart) automatically rejoin the coordinator.
+    group_ips = req.groupIps or [req.ip]
+    if len(group_ips) > 1:
+        _sonos_call(sonos.form_group, group_ips)
     tracks = _tracks_with_album(req.trackIds)
     # Transcode the first track synchronously so playback starts reliably,
     # then warm the rest of the queue in the background.
@@ -407,6 +432,9 @@ def radio_play(station_id: str, req: RadioPlayRequest):
     station = next((s for s in stations if s["id"] == station_id), None)
     if not station:
         raise HTTPException(404, "Station not found")
+    group_ips = req.groupIps or [req.ip]
+    if len(group_ips) > 1:
+        _sonos_call(sonos.form_group, group_ips)
     _sonos_call(sonos.play_radio, req.ip, station["url"], station["name"])
     return {"ok": True}
 

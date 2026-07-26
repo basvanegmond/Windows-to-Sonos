@@ -10,6 +10,19 @@ from soco.data_structures import DidlMusicTrack, DidlResource
 from library import Track
 from transcoder import needs_transcode
 
+
+def _probe_duration(path: str) -> float:
+    """Read actual duration from a media file via mutagen. Returns 0.0 on failure."""
+    try:
+        from mutagen import File as MutagenFile
+        audio = MutagenFile(path)
+        if audio and audio.info and audio.info.length > 0:
+            return float(audio.info.length)
+    except Exception:
+        pass
+    return 0.0
+
+
 PLAY_MODES = {
     (False, False): "NORMAL",
     (True, False): "SHUFFLE_NOREPEAT",
@@ -71,10 +84,19 @@ class SonosController:
     def _didl(self, track: Track, album_id: str) -> DidlMusicTrack:
         uri = self.stream_url(track)
         mime = "audio/flac" if needs_transcode(track) else track.mime
+        # For YouTube tracks the metadata duration from yt-dlp can be slightly
+        # off (rounded seconds) or missing (0). Probe the actual file so Sonos
+        # knows the exact length — without this it may stop the track early or
+        # not advance to the next queue item.
+        duration = track.duration
+        if track.id.startswith("yt"):
+            probed = _probe_duration(track.path)
+            if probed > 0:
+                duration = probed
         res = DidlResource(
             uri=uri,
             protocol_info=f"http-get:*:{mime}:*",
-            duration=self._hms(track.duration) if track.duration else None,
+            duration=self._hms(duration) if duration else None,
         )
         return DidlMusicTrack(
             title=track.title,
@@ -86,6 +108,7 @@ class SonosController:
             original_track_number=track.track_no or None,
             resources=[res],
         )
+
 
     # ---------- speakers & grouping ----------
 

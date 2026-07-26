@@ -150,6 +150,18 @@ def fetch(url: str) -> YouTubeItem:
         if not item.audio_path.exists():
             raise RuntimeError("Download finished but audio file is missing")
         remux_faststart(item.audio_path)
+        # Probe the remuxed file for the exact duration — yt-dlp metadata is
+        # sometimes a rounded integer, and Sonos uses the DIDL duration to know
+        # when a track ends. An inaccurate value can cause early stop.
+        probed = _probe_m4a_duration(item.audio_path)
+        if probed > 0:
+            item = YouTubeItem(
+                video_id=item.video_id,
+                title=item.title,
+                uploader=item.uploader,
+                duration=probed,
+                source_url=item.source_url,
+            )
         _sidecar(item.video_id).write_text(
             json.dumps({
                 "video_id": item.video_id,
@@ -160,6 +172,18 @@ def fetch(url: str) -> YouTubeItem:
             }, ensure_ascii=False),
             encoding="utf-8")
         return item
+
+
+def _probe_m4a_duration(path: Path) -> float:
+    """Read the actual duration from a local m4a/mp4 file via mutagen."""
+    try:
+        from mutagen import File as MutagenFile
+        audio = MutagenFile(str(path))
+        if audio and audio.info and audio.info.length > 0:
+            return float(audio.info.length)
+    except Exception:
+        pass
+    return 0.0
 
 
 def remux_faststart(path: Path) -> None:
