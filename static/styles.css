@@ -1009,80 +1009,68 @@ svg { width: 18px; height: 18px; flex-shrink: 0; }
   color: var(--text-faint);
 }
 
-/* ---- speaker selection chips ---- */
+/* ---- unified speaker cards ---- */
 
-.vol-speaker-select {
+.vol-speaker-cards {
   display: flex;
   flex-direction: column;
-  gap: 8px;
+  gap: 12px;
 }
 
-.vol-sp-chip {
+.vol-sp-card {
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  overflow: hidden;
+  transition: border-color 0.25s var(--ease), background 0.25s var(--ease);
+  user-select: none;
+}
+.vol-sp-card.selected {
+  border-color: var(--accent);
+  background: var(--accent-soft);
+}
+.vol-sp-card.unreachable { opacity: 0.4; }
+
+.vol-sp-card-head {
   display: flex;
   align-items: center;
   gap: 14px;
   padding: 14px 16px;
-  border-radius: 13px;
-  border: 1px solid var(--line);
   cursor: pointer;
-  transition: border-color 0.25s var(--ease), background 0.25s var(--ease);
-  user-select: none;
 }
-.vol-sp-chip.selected {
-  border-color: var(--accent);
-  background: var(--accent-soft);
-}
-.vol-sp-chip.unreachable { opacity: 0.4; cursor: default; }
-.vol-sp-chip:not(.unreachable):active { transform: scale(0.98); }
+.vol-sp-card:not(.unreachable) .vol-sp-card-head:active { opacity: 0.8; }
 
-.vol-sp-dot {
-  width: 9px; height: 9px;
-  border-radius: 50%;
-  background: var(--text-faint);
+/* checkbox indicator */
+.vol-sp-check {
+  width: 22px; height: 22px;
+  border-radius: 6px;
+  border: 2px solid var(--text-faint);
   flex-shrink: 0;
+  display: grid;
+  place-items: center;
+  transition: border-color 0.2s, background 0.2s;
 }
-.vol-sp-chip.selected .vol-sp-dot {
+.vol-sp-check svg { width: 12px; height: 12px; opacity: 0; transition: opacity 0.15s; }
+.vol-sp-card.selected .vol-sp-check {
   background: var(--accent);
-  animation: breathe 2.4s ease-in-out infinite;
+  border-color: var(--accent);
 }
+.vol-sp-card.selected .vol-sp-check svg { opacity: 1; stroke: #fff; }
 
 .vol-sp-name { font-size: 15px; font-weight: 500; flex: 1; }
-.vol-sp-status {
-  font-size: 11px;
-  color: var(--text-dim);
-  font-family: "JetBrains Mono", monospace;
-}
-
-/* ---- per-speaker volume rows ---- */
-
-.vol-speaker-sliders {
-  display: flex;
-  flex-direction: column;
-  gap: 20px;
-}
-
-.vol-slider-row { display: flex; flex-direction: column; gap: 10px; }
-
-.vol-slider-label {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-}
-
-.vol-slider-name { font-size: 14px; font-weight: 500; }
-
-.vol-slider-val {
+.vol-sp-vol {
   font-size: 13px;
   color: var(--text-dim);
   font-family: "JetBrains Mono", monospace;
-  min-width: 32px;
+  min-width: 28px;
   text-align: right;
 }
 
+/* slider row inside the card */
 .vol-slider-controls {
   display: flex;
   align-items: center;
   gap: 12px;
+  padding: 0 16px 14px;
 }
 
 /* big finger-friendly thumb */
