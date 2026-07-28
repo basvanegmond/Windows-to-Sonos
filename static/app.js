@@ -417,7 +417,7 @@ async function pollState(immediate = false) {
     before?.trackId !== state.playback?.trackId ||
     before?.queuePosition !== state.playback?.queuePosition;
   if (immediate || trackChanged) refreshQueue();
-  updateMiniPlayer(state.playback);
+
 }
 
 function renderPlayerBar(pb) {
@@ -593,7 +593,6 @@ function wireControls() {
   });
 
   wireYouTube();
-  wireMiniPlayer();
   wireVolumeOverlay();
 
   const drawer = $("queue-drawer");
@@ -616,179 +615,86 @@ async function transportAction(action) {
   } catch (e) { toast(e.message, true); }
 }
 
-/* ---------- mini player (Document Picture-in-Picture) ---------- */
-
-let pipWin = null;
-
-const PIP_CSS = `
-  * { margin: 0; padding: 0; box-sizing: border-box; }
-  :root { --accent: #d9a05b; }
-  body {
-    font-family: "Outfit", system-ui, sans-serif;
-    background: #0c0c0e; color: #ececf1;
-    height: 100vh; display: flex; align-items: center;
-    gap: 12px; padding: 10px 14px; overflow: hidden;
-    user-select: none;
-  }
-  .m-art {
-    width: 58px; height: 58px; border-radius: 9px; object-fit: cover;
-    background: #1a1a1f; border: 1px solid #26262c; flex-shrink: 0;
-  }
-  .m-main { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 6px; }
-  .m-title {
-    font-size: 13px; font-weight: 600;
-    white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
-  }
-  .m-artist {
-    font-size: 11px; color: #8b8b96;
-    white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
-  }
-  .m-bar { height: 3px; border-radius: 2px; background: #26262c; }
-  .m-fill { height: 100%; width: 0%; border-radius: 2px; background: var(--accent); transition: width 0.5s linear; }
-  .m-controls { display: flex; align-items: center; gap: 4px; flex-shrink: 0; }
-  .m-controls button {
-    background: none; border: none; color: #ececf1; cursor: pointer;
-    width: 32px; height: 32px; border-radius: 8px;
-    display: grid; place-items: center;
-  }
-  .m-controls button:hover { background: #1a1a1f; }
-  .m-controls button:active { transform: scale(0.92); }
-  .m-controls svg { width: 15px; height: 15px; }
-  .m-play { background: #ececf1 !important; color: #0c0c0e !important; border-radius: 50% !important; }
-  .m-play:hover { background: var(--accent) !important; }
-`;
-
-const PIP_HTML = `
-  <img class="m-art" id="m-art" alt="">
-  <div class="m-main">
-    <div class="m-title" id="m-title">Nothing playing</div>
-    <div class="m-artist" id="m-artist"></div>
-    <div class="m-bar"><div class="m-fill" id="m-fill"></div></div>
-  </div>
-  <div class="m-controls">
-    <button id="m-prev" title="Previous"><svg viewBox="0 0 24 24" fill="currentColor"><polygon points="19 20 9 12 19 4"/><rect x="5" y="4" width="2" height="16"/></svg></button>
-    <button id="m-play-btn" class="m-play" title="Play / Pause">
-      <svg viewBox="0 0 24 24" fill="currentColor" id="m-icon-play"><polygon points="8 5 19 12 8 19"/></svg>
-      <svg viewBox="0 0 24 24" fill="currentColor" id="m-icon-pause" style="display:none"><rect x="6" y="5" width="4" height="14"/><rect x="14" y="5" width="4" height="14"/></svg>
-    </button>
-    <button id="m-next" title="Next"><svg viewBox="0 0 24 24" fill="currentColor"><polygon points="5 4 15 12 5 20"/><rect x="17" y="4" width="2" height="16"/></svg></button>
-  </div>
-`;
-
-function wireMiniPlayer() {
-  $("mini-toggle").addEventListener("click", async () => {
-    if (pipWin) { pipWin.close(); return; }
-    if (!("documentPictureInPicture" in window)) {
-      toast("Mini player needs Chrome or Edge (Document Picture-in-Picture)", true);
-      return;
-    }
-    try {
-      pipWin = await documentPictureInPicture.requestWindow({ width: 400, height: 92 });
-    } catch (e) {
-      toast("Could not open mini player: " + e.message, true);
-      return;
-    }
-    const doc = pipWin.document;
-    const style = doc.createElement("style");
-    style.textContent = PIP_CSS;
-    doc.head.appendChild(style);
-    doc.title = "Local Hi-Fi";
-    doc.body.innerHTML = PIP_HTML;
-    doc.getElementById("m-prev").addEventListener("click", () => transportAction("prev"));
-    doc.getElementById("m-next").addEventListener("click", () => transportAction("next"));
-    doc.getElementById("m-play-btn").addEventListener("click", () => $("btn-play").click());
-    pipWin.addEventListener("pagehide", () => { pipWin = null; });
-    updateMiniPlayer(state.playback);
-  });
-}
-
-function updateMiniPlayer(pb) {
-  if (!pipWin) return;
-  const doc = pipWin.document;
-  const get = (id) => doc.getElementById(id);
-  if (!get("m-title")) return;
-  const playing = pb && pb.transportState === "PLAYING";
-  get("m-icon-play").style.display = playing ? "none" : "";
-  get("m-icon-pause").style.display = playing ? "" : "none";
-  // Follow the main window's adaptive accent.
-  const accent = getComputedStyle(document.documentElement).getPropertyValue("--accent");
-  if (accent) doc.documentElement.style.setProperty("--accent", accent.trim());
-  if (pb && pb.title) {
-    get("m-title").textContent = pb.title;
-    get("m-artist").textContent = pb.artist || "";
-    const dur = effectiveDuration(pb);
-    const pct = dur > 0 ? (pb.position / dur) * 100 : 0;
-    get("m-fill").style.width = `${pct}%`;
-    let albumId = pb.trackId ? albumOfTrack.get(pb.trackId) : null;
-    if (!albumId && pb.trackId && pb.trackId.startsWith("yt")) {
-      albumId = "yt-" + pb.trackId.slice(2);
-    }
-    const art = get("m-art");
-    const src = albumId ? `/art/${albumId}` : "";
-    if (src && !art.src.endsWith(src)) art.src = src;
-  } else {
-    get("m-title").textContent = "Nothing playing";
-    get("m-artist").textContent = "";
-    get("m-fill").style.width = "0%";
-  }
-}
-
-/* ---------- volume overlay ---------- */
+/* ---------- volume / speaker overlay ---------- */
 
 function wireVolumeOverlay() {
-  const overlay = $("vol-overlay");
-  const btn = $("vol-toggle");
+  const backdrop = $("vol-backdrop");
+  const open = () => { renderVolumeOverlay(); backdrop.hidden = false; };
+  const close = () => { backdrop.hidden = true; };
 
-  const close = () => { overlay.hidden = true; };
-  const open = () => {
-    renderVolumeOverlay();
-    overlay.hidden = false;
-  };
-
-  btn.addEventListener("click", (e) => {
-    e.stopPropagation();
-    overlay.hidden ? open() : close();
-  });
-  $("vol-overlay-close").addEventListener("click", close);
-
-  document.addEventListener("click", (e) => {
-    if (!overlay.hidden && !overlay.contains(e.target) && e.target !== btn) close();
-  });
-  document.addEventListener("keydown", (e) => {
-    if (e.key === "Escape" && !overlay.hidden) close();
-  });
+  $("vol-toggle").addEventListener("click", open);
+  $("speakers-expand").addEventListener("click", open);
+  $("vol-panel-close").addEventListener("click", close);
+  backdrop.addEventListener("click", (e) => { if (e.target === backdrop) close(); });
+  document.addEventListener("keydown", (e) => { if (e.key === "Escape" && !backdrop.hidden) close(); });
 }
 
 function renderVolumeOverlay() {
-  const container = $("vol-overlay-speakers");
-  container.innerHTML = "";
-  const reachable = state.speakers.filter((s) => s.reachable);
-  if (!reachable.length) {
-    container.innerHTML = `<div style="font-size:12px;color:var(--text-faint)">No reachable speakers</div>`;
-    return;
-  }
-  for (const sp of reachable) {
-    const row = document.createElement("div");
-    row.className = "vol-ov-row";
-    const vol = sp.volume ?? 0;
-    row.innerHTML = `
-      <div class="vol-ov-label">
-        <span class="vol-ov-name">${esc(sp.name)}</span>
-        <span class="vol-ov-val mono">${vol}</span>
-      </div>
-      <input type="range" class="vol-ov-slider" min="0" max="100" value="${vol}">
+  // --- speaker selection chips ---
+  const selectEl = $("vol-speaker-select");
+  selectEl.innerHTML = "";
+  for (const sp of state.speakers) {
+    const chip = document.createElement("div");
+    chip.className = "vol-sp-chip" +
+      (state.selected.includes(sp.ip) ? " selected" : "") +
+      (sp.reachable ? "" : " unreachable");
+    chip.innerHTML = `
+      <span class="vol-sp-dot"></span>
+      <span class="vol-sp-name">${esc(sp.name)}</span>
+      <span class="vol-sp-status mono">${sp.reachable ? (sp.volume ?? "–") : "offline"}</span>
     `;
-    const slider = row.querySelector(".vol-ov-slider");
-    const valEl = row.querySelector(".vol-ov-val");
-    slider.addEventListener("input", () => { valEl.textContent = slider.value; });
-    slider.addEventListener("change", async () => {
-      const v = Number(slider.value);
+    if (sp.reachable) {
+      chip.addEventListener("click", async () => {
+        await toggleSpeaker(sp.ip);
+        renderVolumeOverlay();
+      });
+    }
+    selectEl.appendChild(chip);
+  }
+
+  // --- per-speaker volume sliders ---
+  const slidersEl = $("vol-speaker-sliders");
+  slidersEl.innerHTML = "";
+  for (const sp of state.speakers.filter((s) => s.reachable)) {
+    const vol = sp.volume ?? 0;
+    // Use ip as a safe CSS id by replacing dots with dashes
+    const safeId = "vv-" + sp.ip.replace(/\./g, "-");
+    const row = document.createElement("div");
+    row.className = "vol-slider-row";
+    row.innerHTML = `
+      <div class="vol-slider-label">
+        <span class="vol-slider-name">${esc(sp.name)}</span>
+        <span class="vol-slider-val mono" id="${safeId}">${vol}</span>
+      </div>
+      <div class="vol-slider-controls">
+        <button class="vol-step-btn" data-dir="-1" title="Volume down">−</button>
+        <input type="range" class="vol-big-slider" min="0" max="100" value="${vol}">
+        <button class="vol-step-btn" data-dir="1" title="Volume up">+</button>
+      </div>
+    `;
+    const valEl = row.querySelector(`#${safeId}`);
+    const slider = row.querySelector(".vol-big-slider");
+
+    const applyVol = async (v) => {
+      v = Math.max(0, Math.min(100, v));
       sp.volume = v;
+      slider.value = v;
+      valEl.textContent = v;
+      // keep the chip status in sync without re-rendering everything
+      const chipStatus = selectEl.children[state.speakers.indexOf(sp)]
+        ?.querySelector(".vol-sp-status");
+      if (chipStatus) chipStatus.textContent = v;
       try { await api("/api/volume", { ip: sp.ip, volume: v }); }
       catch (e) { toast(e.message, true); }
       renderSpeakers();
+    };
+
+    slider.addEventListener("input", () => { valEl.textContent = slider.value; });
+    slider.addEventListener("change", () => applyVol(Number(slider.value)));
+    row.querySelectorAll(".vol-step-btn").forEach((btn) => {
+      btn.addEventListener("click", () => applyVol((sp.volume ?? 0) + Number(btn.dataset.dir)));
     });
-    container.appendChild(row);
+    slidersEl.appendChild(row);
   }
 }
 
@@ -1194,7 +1100,7 @@ async function loadSpeakers() {
     state.speakers = res.speakers;
     $("server-info").textContent = `serving ${res.serverIp}`;
     renderSpeakers();
-    if (!$("vol-overlay").hidden) renderVolumeOverlay();
+    if (!$("vol-backdrop").hidden) renderVolumeOverlay();
   } catch (e) {
     toast("Could not load speakers: " + e.message, true);
   }

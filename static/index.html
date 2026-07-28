@@ -50,7 +50,12 @@
     </nav>
 
     <div class="speakers-panel">
-      <div class="panel-label mono">SPEAKERS</div>
+      <div class="speakers-panel-head">
+        <span class="panel-label mono">SPEAKERS</span>
+        <button class="icon-btn icon-btn-xs" id="speakers-expand" title="Volume &amp; speaker controls">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M15 3h6v6"/><path d="M9 21H3v-6"/><path d="M21 3l-7 7"/><path d="M3 21l7-7"/></svg>
+        </button>
+      </div>
       <div id="speaker-list" class="speaker-list">
         <div class="skeleton speaker-skeleton"></div>
         <div class="skeleton speaker-skeleton"></div>
@@ -148,23 +153,28 @@
       <button class="icon-btn" id="vol-toggle" title="Volume">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><polygon points="11 5 6 9 2 9 2 15 6 15 11 19" fill="currentColor" stroke="none"/><path d="M15.5 8.5a5 5 0 0 1 0 7"/></svg>
       </button>
-      <button class="icon-btn" id="mini-toggle" title="Mini player (always on top)">
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><rect x="2.5" y="4" width="19" height="16" rx="2"/><rect x="11.5" y="11" width="8" height="6" rx="1" fill="currentColor" stroke="none"/></svg>
-      </button>
     </div>
   </footer>
 
 </div>
 
-<!-- ============ VOLUME OVERLAY ============ -->
-<div class="vol-overlay" id="vol-overlay" hidden>
-  <div class="vol-overlay-head">
-    <span class="panel-label mono">VOLUME</span>
-    <button class="icon-btn" id="vol-overlay-close">
-      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><line x1="6" y1="6" x2="18" y2="18"/><line x1="18" y1="6" x2="6" y2="18"/></svg>
-    </button>
+<!-- ============ VOLUME / SPEAKER OVERLAY ============ -->
+<div class="vol-backdrop" id="vol-backdrop" hidden>
+  <div class="vol-panel">
+    <div class="vol-panel-head">
+      <div class="vol-panel-title">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><polygon points="11 5 6 9 2 9 2 15 6 15 11 19" fill="currentColor" stroke="none"/><path d="M15.5 8.5a5 5 0 0 1 0 7"/><path d="M19.07 4.93a10 10 0 0 1 0 14.14"/></svg>
+        <span>Volume &amp; Speakers</span>
+      </div>
+      <button class="icon-btn" id="vol-panel-close">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><line x1="6" y1="6" x2="18" y2="18"/><line x1="18" y1="6" x2="6" y2="18"/></svg>
+      </button>
+    </div>
+    <div class="vol-section-label mono">SPEAKERS</div>
+    <div id="vol-speaker-select" class="vol-speaker-select"></div>
+    <div class="vol-section-label mono">VOLUME</div>
+    <div id="vol-speaker-sliders" class="vol-speaker-sliders"></div>
   </div>
-  <div id="vol-overlay-speakers" class="vol-overlay-speakers"></div>
 </div>
 
 <!-- ============ YOUTUBE OVERLAY ============ -->
