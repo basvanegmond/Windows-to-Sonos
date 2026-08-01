@@ -471,6 +471,7 @@ function renderPlayerBar(pb) {
       resetAccent();
     }
   }
+  updateFullscreenArt(pb);
 }
 
 /* ---------- queue drawer ---------- */
@@ -535,25 +536,35 @@ function wireControls() {
 
   $("btn-shuffle").addEventListener("click", async () => {
     if (!requireSpeaker()) return;
+    const newShuffle = !(state.playback?.shuffle);
+    $("btn-shuffle").classList.toggle("on", newShuffle);
     try {
       await api("/api/playmode", {
         ip: coordinator(),
-        shuffle: !(state.playback?.shuffle),
+        shuffle: newShuffle,
         repeat: state.playback?.repeat ?? false,
       });
       pollState();
-    } catch (e) { toast(e.message, true); }
+    } catch (e) {
+      $("btn-shuffle").classList.toggle("on", !newShuffle);
+      toast(e.message, true);
+    }
   });
   $("btn-repeat").addEventListener("click", async () => {
     if (!requireSpeaker()) return;
+    const newRepeat = !(state.playback?.repeat);
+    $("btn-repeat").classList.toggle("on", newRepeat);
     try {
       await api("/api/playmode", {
         ip: coordinator(),
         shuffle: state.playback?.shuffle ?? false,
-        repeat: !(state.playback?.repeat),
+        repeat: newRepeat,
       });
       pollState();
-    } catch (e) { toast(e.message, true); }
+    } catch (e) {
+      $("btn-repeat").classList.toggle("on", !newRepeat);
+      toast(e.message, true);
+    }
   });
 
   $("seek-bar").addEventListener("click", async (e) => {
@@ -595,6 +606,7 @@ function wireControls() {
 
   wireYouTube();
   wireMiniPlayer();
+  wireFullscreenArt();
   wireVolumeOverlay();
 
   const drawer = $("queue-drawer");
@@ -680,7 +692,10 @@ function wireMiniPlayer() {
   $("mini-toggle").addEventListener("click", async () => {
     if (pipWin) { pipWin.close(); return; }
     if (!("documentPictureInPicture" in window)) {
-      toast("Mini player needs Chrome or Edge (Document Picture-in-Picture)", true);
+      if (!window.isSecureContext)
+        toast("Mini player: open via http://127.0.0.1:8756 — LAN IP is not a secure context", true);
+      else
+        toast("Mini player needs Chrome 116+ or Edge — update your browser", true);
       return;
     }
     try {
@@ -732,6 +747,36 @@ function updateMiniPlayer(pb) {
     get("m-artist").textContent = "";
     get("m-fill").style.width = "0%";
   }
+}
+
+/* ---------- fullscreen art overlay ---------- */
+
+function wireFullscreenArt() {
+  const backdrop = $("afs-backdrop");
+  if (!backdrop) return;
+  const open = () => {
+    const pb = state.playback;
+    if (!pb?.title) return;
+    updateFullscreenArt(pb);
+    backdrop.hidden = false;
+  };
+  const close = () => { backdrop.hidden = true; };
+  $("player-art").style.cursor = "pointer";
+  $("player-art").addEventListener("click", open);
+  $("afs-close").addEventListener("click", (e) => { e.stopPropagation(); close(); });
+  backdrop.addEventListener("click", close);
+  document.addEventListener("keydown", (e) => { if (e.key === "Escape" && !backdrop.hidden) close(); });
+}
+
+function updateFullscreenArt(pb) {
+  const backdrop = $("afs-backdrop");
+  if (!backdrop || backdrop.hidden) return;
+  let albumId = pb?.trackId ? albumOfTrack.get(pb.trackId) : null;
+  if (!albumId && pb?.trackId?.startsWith("yt")) albumId = "yt-" + pb.trackId.slice(2);
+  backdrop.style.backgroundImage = albumId ? `url(/art/${albumId})` : "none";
+  $("afs-title").textContent  = pb?.title  || "";
+  $("afs-artist").textContent = pb?.artist || "";
+  $("afs-album").textContent  = pb?.album  || "";
 }
 
 /* ---------- volume / speaker overlay ---------- */
@@ -1090,6 +1135,7 @@ async function submitYt(addToQueue) {
       : `Playing: ${res.item.title}`);
     refreshYtList();
     pollState(true);
+    setTimeout(() => pollState(true), 700);
   } catch (e) {
     setYtStatus(e.message, true);
   } finally {

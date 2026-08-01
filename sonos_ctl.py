@@ -92,7 +92,7 @@ class SonosController:
         if track.id.startswith("yt"):
             probed = _probe_duration(track.path)
             if probed > 0:
-                duration = probed
+                duration = probed + 1.0   # avoid premature stop from sub-second rounding
         res = DidlResource(
             uri=uri,
             protocol_info=f"http-get:*:{mime}:*",
@@ -174,6 +174,10 @@ class SonosController:
         dev.clear_queue()
         for track, album_id in tracks:
             dev.add_to_queue(self._didl(track, album_id))
+        try:
+            dev.play_mode = "NORMAL"   # honour start_index literally
+        except Exception:
+            pass
         dev.play_from_queue(start_index)
 
     def add_to_queue(self, ip: str, tracks: list[tuple[Track, str]],
