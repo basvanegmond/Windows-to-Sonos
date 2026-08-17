@@ -1,7 +1,9 @@
 """Music library scanner: walks configured folders, reads tags via mutagen,
 groups tracks into albums, and exposes embedded/folder album art."""
 
+import functools
 import hashlib
+import logging
 import os
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -21,6 +23,12 @@ MIME_BY_EXT = {
     ".ogg": "audio/ogg",
     ".oga": "audio/ogg",
     ".wav": "audio/wav",
+    ".opus": "audio/ogg",
+    ".wv":   "audio/x-wavpack",
+    ".dsf":  "audio/x-dsf",
+    ".dff":  "audio/x-dff",
+    ".aiff": "audio/aiff",
+    ".aif":  "audio/aiff",
 }
 
 COVER_NAMES = ("cover.jpg", "cover.png", "folder.jpg", "folder.png",
@@ -141,6 +149,7 @@ def _read_track(path: Path) -> Track | None:
     )
 
 
+@functools.lru_cache(maxsize=512)
 def extract_art(track_path: str) -> tuple[bytes, str] | None:
     """Return (image_bytes, mime) from embedded tags or a cover file in the folder."""
     path = Path(track_path)
@@ -199,7 +208,8 @@ class Library:
                         continue
                     try:
                         t = _read_track(p)
-                    except Exception:
+                    except Exception as exc:
+                        logging.warning("Skipping %s: %s", p, exc)
                         t = None
                     if t:
                         tracks[t.id] = t
@@ -214,6 +224,7 @@ class Library:
 
         self.tracks = tracks
         self.albums = albums
+        extract_art.cache_clear()
 
     def album_art(self, album_id: str) -> tuple[bytes, str] | None:
         album = self.albums.get(album_id)

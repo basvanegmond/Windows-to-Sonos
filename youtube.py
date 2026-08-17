@@ -17,8 +17,15 @@ from library import Track
 YT_CACHE = Path(__file__).parent / ".cache" / "youtube"
 FAVS_PATH = Path(__file__).parent / "youtube_favourites.json"
 
+# yt-dlp needs a JS runtime to solve YouTube's nsig challenge; without one,
+# many videos fail with "unable to download video data: HTTP Error 403:
+# Forbidden" (nsig extraction failed). Only "deno" is enabled by default and
+# it's not installed here, but Node.js is — so opt it in explicitly.
+JS_RUNTIMES = {"node": {}}
+
 _locks: dict[str, threading.Lock] = {}
 _locks_guard = threading.Lock()
+_favs_lock = threading.Lock()
 
 
 @dataclass
@@ -86,8 +93,9 @@ def _load_item(video_id: str) -> YouTubeItem | None:
         item = YouTubeItem(**meta)
         if item.audio_path.exists():
             return item
-    except Exception:
-        pass
+    except Exception as exc:
+        import logging
+        logging.warning("Failed to load YT item %s: %s", video_id, exc)
     return None
 
 
@@ -103,7 +111,7 @@ def probe_id(url: str) -> str | None:
         if m:
             return m.group(1)
     try:
-        with yt_dlp.YoutubeDL({"quiet": True, "simulate": True}) as ydl:
+        with yt_dlp.YoutubeDL({"quiet": True, "simulate": True, "js_runtimes": JS_RUNTIMES}) as ydl:
             info = ydl.extract_info(url, download=False, process=False)
             return info.get("id")
     except Exception:
@@ -130,6 +138,7 @@ def fetch(url: str) -> YouTubeItem:
             "format": "bestaudio[ext=m4a]/bestaudio/best",
             "outtmpl": str(YT_CACHE / "%(id)s.%(ext)s"),
             "writethumbnail": True,
+            "js_runtimes": JS_RUNTIMES,
             "ffmpeg_location": imageio_ffmpeg.get_ffmpeg_exe(),
             "postprocessors": [
                 {"key": "FFmpegExtractAudio", "preferredcodec": "m4a"},
@@ -140,6 +149,12 @@ def fetch(url: str) -> YouTubeItem:
             info = ydl.extract_info(url, download=True)
         if info.get("entries"):  # playlist URL despite noplaylist
             info = info["entries"][0]
+        resolved_id = info.get("id")
+        if resolved_id:
+            # Check if another concurrent request already cached this video
+            existing = _load_item(resolved_id)
+            if existing is not None:
+                return existing
         item = YouTubeItem(
             video_id=info["id"],
             title=info.get("title") or info["id"],
@@ -203,6 +218,10 @@ def remux_faststart(path: Path) -> None:
         tmp.replace(path)
     else:
         tmp.unlink(missing_ok=True)
+        raise RuntimeError(
+            f"ffmpeg remux failed (exit {result.returncode}): "
+            f"{result.stderr.decode(errors='replace').strip()}"
+        )
 
 
 def _load_favs() -> set[str]:
@@ -215,10 +234,12 @@ def _load_favs() -> set[str]:
 
 
 def _save_favs(favs: set[str]) -> None:
-    FAVS_PATH.write_text(
+    tmp = FAVS_PATH.with_suffix(".tmp")
+    tmp.write_text(
         json.dumps({"video_ids": sorted(favs)}, ensure_ascii=False, indent=2),
         encoding="utf-8",
     )
+    tmp.replace(FAVS_PATH)  # atomic rename on same volume
 
 
 def favourites_set() -> set[str]:
@@ -230,15 +251,17 @@ def is_favourite(video_id: str) -> bool:
 
 
 def add_favourite(video_id: str) -> None:
-    favs = _load_favs()
-    favs.add(video_id)
-    _save_favs(favs)
+    with _favs_lock:
+        favs = _load_favs()
+        favs.add(video_id)
+        _save_favs(favs)
 
 
 def remove_favourite(video_id: str) -> None:
-    favs = _load_favs()
-    favs.discard(video_id)
-    _save_favs(favs)
+    with _favs_lock:
+        favs = _load_favs()
+        favs.discard(video_id)
+        _save_favs(favs)
 
 
 def list_favourites() -> list[YouTubeItem]:
@@ -262,7 +285,7 @@ def list_items() -> list[YouTubeItem]:
 def delete(video_id: str) -> bool:
     remove_favourite(video_id)
     found = False
-    for suffix in (".m4a", ".jpg", ".json", ".webp", ".part"):
+    for suffix in (".m4a", ".m4a.part", ".remux.m4a", ".jpg", ".json", ".webp", ".part"):
         p = YT_CACHE / f"{video_id}{suffix}"
         if p.exists():
             p.unlink()

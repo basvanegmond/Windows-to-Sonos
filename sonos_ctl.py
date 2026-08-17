@@ -2,6 +2,7 @@
 with DIDL metadata (so speakers display title/artist/art), and transport."""
 
 import socket
+from concurrent.futures import ThreadPoolExecutor
 from urllib.parse import quote
 
 import soco
@@ -64,7 +65,9 @@ class SonosController:
 
     def device(self, ip: str) -> soco.SoCo:
         if ip not in self._devices:
-            self._devices[ip] = soco.SoCo(ip)
+            dev = soco.SoCo(ip)
+            dev.timeout = 3  # cap per-request wait; LAN speakers respond in <1s
+            self._devices[ip] = dev
         return self._devices[ip]
 
     # ---------- URLs & metadata ----------
@@ -113,22 +116,44 @@ class SonosController:
     # ---------- speakers & grouping ----------
 
     def speaker_states(self) -> list[dict]:
-        out = []
-        for cfg in self.configured:
-            entry = {"name": cfg["name"], "ip": cfg["ip"], "reachable": False}
+        def _fetch_one(cfg: dict) -> dict:
             try:
                 dev = self.device(cfg["ip"])
-                entry["volume"] = dev.volume
-                entry["muted"] = dev.mute
-                entry["model"] = dev.speaker_info.get("model_name", "")
-                entry["zone"] = dev.player_name
-                coordinator = dev.group.coordinator if dev.group else dev
-                entry["coordinatorIp"] = coordinator.ip_address
-                entry["reachable"] = True
+                vol = dev.volume
+                mute = dev.mute
+                info = dev.speaker_info
+                zone = dev.player_name
+                try:
+                    group = dev.group
+                    coord_ip = group.coordinator.ip_address if group else cfg["ip"]
+                except Exception:
+                    coord_ip = cfg["ip"]
+                return {
+                    "name": cfg["name"],
+                    "ip": cfg["ip"],
+                    "volume": vol,
+                    "muted": mute,
+                    "model": info.get("model_name", ""),
+                    "zone": zone,
+                    "reachable": True,
+                    "coordinatorIp": coord_ip,
+                }
             except Exception as exc:
-                entry["error"] = str(exc)
-            out.append(entry)
-        return out
+                self._devices.pop(cfg["ip"], None)  # evict stale SoCo object
+                return {
+                    "name": cfg["name"],
+                    "ip": cfg["ip"],
+                    "volume": 0,
+                    "muted": False,
+                    "model": "",
+                    "zone": "",
+                    "reachable": False,
+                    "coordinatorIp": cfg["ip"],
+                    "error": str(exc),
+                }
+
+        with ThreadPoolExecutor(max_workers=max(1, len(self.configured))) as ex:
+            return list(ex.map(_fetch_one, self.configured))
 
     def form_group(self, ips: list[str]) -> soco.SoCo:
         """Make the first IP the coordinator; join the rest; unjoin configured
@@ -162,37 +187,34 @@ class SonosController:
             if group:
                 return self.device(group.coordinator.ip_address)
         except Exception:
-            pass
+            self._devices.pop(ip, None)  # evict; will be recreated fresh next call
         return dev
 
     # ---------- queue & playback ----------
 
     def play_tracks(self, ip: str, tracks: list[tuple[Track, str]],
-                    start_index: int = 0) -> None:
+                    start_index: int = 0, play_mode: str = "NORMAL") -> None:
         """Replace the Sonos queue with tracks [(track, album_id)] and play."""
         dev = self.coordinator_of(ip)
         dev.clear_queue()
         for track, album_id in tracks:
             dev.add_to_queue(self._didl(track, album_id))
-        try:
-            dev.play_mode = "NORMAL"   # honour start_index literally
-        except Exception:
-            pass
+        dev.play_mode = play_mode   # let exceptions propagate — callers handle 502
         dev.play_from_queue(start_index)
 
     def add_to_queue(self, ip: str, tracks: list[tuple[Track, str]],
                      play_next: bool = False) -> None:
         dev = self.coordinator_of(ip)
-        position = 0
+        insert_at = None
         if play_next:
             try:
                 info = dev.get_current_track_info()
-                position = int(info.get("playlist_position") or 0) + 1
+                insert_at = int(info.get("playlist_position") or 0) + 1
             except Exception:
-                position = 0
+                pass  # degrade gracefully: append to end
         for i, (track, album_id) in enumerate(tracks):
-            dev.add_to_queue(self._didl(track, album_id),
-                             position=position + i if position else 0)
+            kwargs = {"position": insert_at + i} if insert_at is not None else {}
+            dev.add_to_queue(self._didl(track, album_id), **kwargs)
 
     def transport(self, ip: str, action: str) -> None:
         dev = self.coordinator_of(ip)

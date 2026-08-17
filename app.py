@@ -2,7 +2,9 @@
 directly to Sonos speakers over UPnP/HTTP. Run:  python app.py"""
 
 import json
+import logging
 import os
+import re
 from pathlib import Path
 
 import uvicorn
@@ -20,14 +22,21 @@ from transcoder import ensure_transcoded, needs_transcode, prewarm
 BASE_DIR = Path(__file__).parent
 CONFIG_PATH = BASE_DIR / "config.json"
 
-config = json.loads(CONFIG_PATH.read_text(encoding="utf-8"))
-library = Library(config["music_folders"])
-sonos = SonosController(config["speakers"], config["port"])
-
-# YouTube tracks live outside the folder library, keyed by track id ("yt<video_id>").
-yt_tracks: dict[str, Track] = {
-    item.track_id: item.to_track() for item in youtube.list_items()
-}
+try:
+    config = json.loads(CONFIG_PATH.read_text(encoding="utf-8"))
+    library = Library(config["music_folders"])
+    sonos = SonosController(config["speakers"], config["port"])
+    # YouTube tracks live outside the folder library, keyed by track id ("yt<video_id>").
+    yt_tracks: dict[str, Track] = {
+        item.track_id: item.to_track() for item in youtube.list_items()
+    }
+except Exception as _startup_exc:
+    import logging as _log, traceback as _tb
+    (BASE_DIR / "logs").mkdir(exist_ok=True)
+    (BASE_DIR / "logs" / "server.log").write_text(
+        f"STARTUP FAILED:\n{_tb.format_exc()}", encoding="utf-8"
+    )
+    raise
 
 
 def resolve_track(track_id: str) -> Track | None:
@@ -43,6 +52,7 @@ class PlayRequest(BaseModel):
     trackIds: list[str]
     startIndex: int = 0
     groupIps: list[str] = []  # all selected IPs; used to re-enforce group before play
+    playMode: str | None = None
 
 
 class QueueAddRequest(BaseModel):
@@ -196,13 +206,19 @@ def stream(track_ref: str, request: Request):
     common = {
         "Accept-Ranges": "bytes",
         "Content-Type": mime,
+        "Content-Disposition": "inline",
     }
 
     if range_header:
         try:
             spec = range_header.replace("bytes=", "").split("-")
-            start = int(spec[0]) if spec[0] else 0
-            end = int(spec[1]) if len(spec) > 1 and spec[1] else file_size - 1
+            if spec[0] == "":                          # suffix range: bytes=-N
+                suffix_len = int(spec[1])
+                start = max(0, file_size - suffix_len)
+                end   = file_size - 1
+            else:
+                start = int(spec[0])
+                end   = int(spec[1]) if len(spec) > 1 and spec[1] else file_size - 1
         except ValueError:
             raise HTTPException(416, "Invalid range")
         end = min(end, file_size - 1)
@@ -240,7 +256,8 @@ def youtube_fetch(req: YouTubeRequest):
     try:
         item = youtube.fetch(req.url)
     except Exception as exc:
-        raise HTTPException(502, f"YouTube fetch failed: {exc}") from exc
+        logging.warning("yt-dlp failed for %s: %s", req.url, exc)
+        raise HTTPException(502, f"Could not load: {exc}") from exc
     yt_tracks[item.track_id] = item.to_track()
     if req.ip:
         group_ips = req.groupIps or [req.ip]
@@ -267,7 +284,6 @@ def youtube_fetch_only(req: YouTubeFetchRequest):
 
 @app.get("/api/youtube/favourites")
 def youtube_list_favs():
-    favs = youtube.favourites_set()
     return {"items": [{**i.to_dict(), "isFavourite": True} for i in youtube.list_favourites()]}
 
 
@@ -279,6 +295,8 @@ def youtube_list():
 
 @app.post("/api/youtube/{video_id}/favourite")
 def youtube_add_fav(video_id: str):
+    if not re.fullmatch(r"[A-Za-z0-9_-]{11}", video_id):
+        raise HTTPException(400, "Invalid video ID")
     if f"yt{video_id}" not in yt_tracks:
         raise HTTPException(404, "Video not in cache")
     youtube.add_favourite(video_id)
@@ -287,12 +305,16 @@ def youtube_add_fav(video_id: str):
 
 @app.delete("/api/youtube/{video_id}/favourite")
 def youtube_remove_fav(video_id: str):
+    if not re.fullmatch(r"[A-Za-z0-9_-]{11}", video_id):
+        raise HTTPException(400, "Invalid video ID")
     youtube.remove_favourite(video_id)
     return {"ok": True}
 
 
 @app.delete("/api/youtube/{video_id}")
 def youtube_delete(video_id: str):
+    if not re.fullmatch(r"[A-Za-z0-9_-]{11}", video_id):
+        raise HTTPException(400, "Invalid video ID")
     yt_tracks.pop(f"yt{video_id}", None)
     if not youtube.delete(video_id):
         raise HTTPException(404, "Not found")
@@ -331,7 +353,7 @@ def play(req: PlayRequest):
         except Exception as exc:
             raise HTTPException(500, f"Transcode failed: {exc}") from exc
     prewarm([t for t, _ in tracks])
-    _sonos_call(sonos.play_tracks, req.ip, tracks, req.startIndex)
+    _sonos_call(sonos.play_tracks, req.ip, tracks, req.startIndex, play_mode=req.playMode or "NORMAL")
     return {"ok": True}
 
 

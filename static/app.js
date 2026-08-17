@@ -20,6 +20,8 @@ const albumOfTrack = new Map(); // trackId -> albumId
 const trackById = new Map();    // trackId -> track dict
 const ytDurations = new Map();  // yt trackId -> known duration (Sonos reports 0:00 for these)
 
+let _pollBusy = false;
+
 // Sonos cannot read a duration from some streams (e.g. YouTube audio);
 // fall back to the duration yt-dlp gave us.
 function effectiveDuration(pb) {
@@ -131,8 +133,11 @@ function renderSpeakers() {
         el.querySelector(".vol-val").textContent = slider.value;
       });
       slider.addEventListener("change", async () => {
-        try { await api("/api/volume", { ip: sp.ip, volume: Number(slider.value) }); }
-        catch (e) { toast(e.message, true); }
+        try {
+          await api("/api/volume", { ip: sp.ip, volume: Number(slider.value) });
+          sp.volume = Number(slider.value);
+          renderSpeakers();
+        } catch (e) { toast(e.message, true); }
       });
       slider.addEventListener("click", (e) => e.stopPropagation());
     }
@@ -371,15 +376,17 @@ async function playAlbum(album, { startIndex = 0, shuffle = false } = {}) {
 }
 
 async function playTracks(trackIds, startIndex = 0, shuffle = false) {
-  if (!requireSpeaker()) return;
+  if (!coordinator()) { toast("No speaker selected", true); return; }
   try {
-    await api("/api/play", { ip: coordinator(), trackIds, startIndex, groupIps: state.selected });
-    if (shuffle) {
-      await api("/api/playmode", { ip: coordinator(), shuffle: true, repeat: state.playback?.repeat ?? false });
-    }
-    toast(`Playing on ${targetNames()}`);
+    await api("/api/play", {
+      ip: coordinator(),
+      trackIds,
+      startIndex,
+      groupIps: state.selected,
+      playMode: shuffle ? "SHUFFLE_NOREPEAT" : "NORMAL",
+    });
     pollState(true);
-    refreshQueue();
+    setTimeout(() => pollState(true), 800);
   } catch (e) { toast(e.message, true); }
 }
 
@@ -402,23 +409,28 @@ function targetNames() {
 /* ---------- player bar ---------- */
 
 async function pollState(immediate = false) {
-  const ip = coordinator();
-  if (!ip) { renderPlayerBar(null); return; }
-  const before = state.playback;
+  if (_pollBusy && !immediate) return;
+  _pollBusy = true;
   try {
-    const st = await api(`/api/state?ip=${encodeURIComponent(ip)}`);
-    state.playback = st.error ? null : st;
-  } catch { state.playback = null; }
-  renderPlayerBar(state.playback);
-  highlightPlaying();
-  updateMiniPlayer(state.playback);
-  // Re-render the queue whenever the playing track advances, so the
-  // position marker follows playback instead of freezing at song 1.
-  const trackChanged =
-    before?.trackId !== state.playback?.trackId ||
-    before?.queuePosition !== state.playback?.queuePosition;
-  if (immediate || trackChanged) refreshQueue();
-
+    const ip = coordinator();
+    if (!ip) { renderPlayerBar(null); return; }
+    const before = state.playback;
+    try {
+      const st = await api(`/api/state?ip=${encodeURIComponent(ip)}`);
+      state.playback = st.error ? null : st;
+    } catch { state.playback = null; }
+    renderPlayerBar(state.playback);
+    highlightPlaying();
+    updateMiniPlayer(state.playback);
+    // Re-render the queue whenever the playing track advances, so the
+    // position marker follows playback instead of freezing at song 1.
+    const trackChanged =
+      before?.trackId !== state.playback?.trackId ||
+      before?.queuePosition !== state.playback?.queuePosition;
+    if (immediate || trackChanged) refreshQueue();
+  } finally {
+    _pollBusy = false;
+  }
 }
 
 function renderPlayerBar(pb) {
@@ -1134,8 +1146,7 @@ async function submitYt(addToQueue) {
       ? `Queued: ${res.item.title}`
       : `Playing: ${res.item.title}`);
     refreshYtList();
-    pollState(true);
-    setTimeout(() => pollState(true), 700);
+    setTimeout(() => pollState(true), 800);
   } catch (e) {
     setYtStatus(e.message, true);
   } finally {
@@ -1234,6 +1245,7 @@ async function refreshYtList() {
     el.querySelector('[data-act="del"]').addEventListener("click", async () => {
       try {
         await api(`/api/youtube/${encodeURIComponent(item.videoId)}`, undefined, "DELETE");
+        ytDurations.delete(`yt${item.videoId}`);
         refreshYtList();
       } catch (e) { toast(e.message, true); }
     });
@@ -1244,16 +1256,20 @@ async function refreshYtList() {
 /* ---------- boot ---------- */
 
 async function loadLibrary() {
-  state.library = await api("/api/library");
-  albumOfTrack.clear();
-  trackById.clear();
-  for (const album of state.library.albums) {
-    for (const t of album.tracks) {
-      albumOfTrack.set(t.id, album.id);
-      trackById.set(t.id, t);
+  try {
+    state.library = await api("/api/library");
+    albumOfTrack.clear(); trackById.clear();
+    for (const album of state.library.albums) {
+      for (const t of album.tracks) {
+        albumOfTrack.set(t.id, album.id);
+        trackById.set(t.id, t);
+      }
     }
+    renderContent();
+  } catch (e) {
+    toast("Library unavailable — retrying…", true);
+    setTimeout(() => loadLibrary(), 5000);
   }
-  renderContent();
 }
 
 async function loadSpeakers() {
@@ -1261,6 +1277,20 @@ async function loadSpeakers() {
     const res = await api("/api/speakers");
     state.speakers = res.speakers;
     $("server-info").textContent = `serving ${res.serverIp}`;
+    // Drop any selected IPs that are now unreachable
+    state.selected = state.selected.filter(ip => {
+      const sp = state.speakers.find(s => s.ip === ip);
+      return sp && sp.reachable;
+    });
+    // If our coordinator left the group, update state.selected from coordinatorIp data
+    if (state.selected.length) {
+      const coordIp = state.selected[0];
+      state.speakers.forEach(sp => {
+        if (sp.reachable && sp.coordinatorIp === coordIp && !state.selected.includes(sp.ip)) {
+          state.selected.push(sp.ip);
+        }
+      });
+    }
     renderSpeakers();
     if (!$("vol-backdrop").hidden) renderVolumeOverlay();
   } catch (e) {
@@ -1270,7 +1300,7 @@ async function loadSpeakers() {
 
 async function boot() {
   wireControls();
-  await Promise.all([loadLibrary(), loadSpeakers(), loadYtDurations()]);
+  await Promise.allSettled([loadLibrary(), loadSpeakers(), loadYtDurations()]);
   // Auto-select the first reachable speaker so play works immediately.
   const first = state.speakers.find((s) => s.reachable);
   if (first && !state.selected.length) {
@@ -1278,8 +1308,8 @@ async function boot() {
     renderSpeakers();
   }
   pollState(true);
-  setInterval(pollState, 1000);
-  setInterval(loadSpeakers, 15000);
+  let _pollTimer = setInterval(pollState, 1000);
+  let _speakerTimer = setInterval(loadSpeakers, 15000);
 }
 
 boot();

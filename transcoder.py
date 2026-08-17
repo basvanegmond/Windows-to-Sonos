@@ -6,6 +6,7 @@ just stays STOPPED. Tracks that exceed the limit are downsampled once with
 the bundled ffmpeg and cached next to the app in .cache/transcode/.
 """
 
+import logging
 import subprocess
 import threading
 from concurrent.futures import ThreadPoolExecutor
@@ -14,6 +15,8 @@ from pathlib import Path
 import imageio_ffmpeg
 
 from library import Track
+
+_FFMPEG = imageio_ffmpeg.get_ffmpeg_exe()
 
 CACHE_DIR = Path(__file__).parent / ".cache" / "transcode"
 
@@ -54,7 +57,7 @@ def ensure_transcoded(track: Track) -> Path:
             return out
         CACHE_DIR.mkdir(parents=True, exist_ok=True)
         tmp = out.with_suffix(".part")
-        ffmpeg = imageio_ffmpeg.get_ffmpeg_exe()
+        ffmpeg = _FFMPEG
         # 88.2 stays in the 44.1 family; everything else lands on 48 kHz.
         target_rate = 44100 if (track.sample_rate or 0) % 44100 == 0 else 48000
         cmd = [
@@ -86,5 +89,5 @@ def prewarm(tracks: list[Track]) -> None:
 def _safe_transcode(track: Track) -> None:
     try:
         ensure_transcoded(track)
-    except Exception:
-        pass
+    except Exception as exc:
+        logging.warning("prewarm failed for %s: %s", track.path, exc)
