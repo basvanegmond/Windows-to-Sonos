@@ -66,7 +66,7 @@ class SonosController:
     def device(self, ip: str) -> soco.SoCo:
         if ip not in self._devices:
             dev = soco.SoCo(ip)
-            dev.timeout = 3  # cap per-request wait; LAN speakers respond in <1s
+            dev.timeout = 2  # cap per-request wait; LAN speakers respond in <1s
             self._devices[ip] = dev
         return self._devices[ip]
 
@@ -287,6 +287,13 @@ class SonosController:
             "shuffle": "SHUFFLE" in mode,
             "repeat": mode in ("REPEAT_ALL", "SHUFFLE", "REPEAT_ONE"),
         }
+
+    def state_with_timeout(self, ip: str, timeout: float = 4.0) -> dict:
+        """Run state() in a separate thread so a hung speaker can't hold
+        the server's thread pool indefinitely. Raises TimeoutError on overrun."""
+        with ThreadPoolExecutor(max_workers=1) as ex:
+            fut = ex.submit(self.state, ip)
+            return fut.result(timeout=timeout)
 
     def play_radio(self, ip: str, url: str, title: str) -> None:
         """Play an internet radio stream URI directly (bypasses the track queue)."""

@@ -411,7 +411,9 @@ def playmode(req: PlayModeRequest):
 @app.get("/api/state")
 def state(ip: str):
     try:
-        return sonos.state(ip)
+        return sonos.state_with_timeout(ip, timeout=4.0)
+    except TimeoutError:
+        return JSONResponse({"error": "speaker timeout"}, status_code=502)
     except Exception as exc:
         return JSONResponse({"error": str(exc)}, status_code=502)
 
