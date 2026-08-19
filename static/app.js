@@ -12,6 +12,7 @@ const state = {
   search: "",
   playback: null,          // /api/state payload
   queueOpen: false,
+  queueItems: [],          // cached queue — updated after play and on track change
   currentAlbumId: null,    // album of the playing track (for art + accent)
   seekDrag: false,
 };
@@ -377,16 +378,20 @@ async function playAlbum(album, { startIndex = 0, shuffle = false } = {}) {
 
 async function playTracks(trackIds, startIndex = 0, shuffle = false) {
   if (!coordinator()) { toast("No speaker selected", true); return; }
+  // Preserve the current shuffle mode unless this call explicitly requests one.
+  // This means the global shuffle button stays respected when playing a new album.
+  const effectiveShuffle = shuffle || (state.playback?.shuffle ?? false);
   try {
     await api("/api/play", {
       ip: coordinator(),
       trackIds,
       startIndex,
       groupIps: state.selected,
-      playMode: shuffle ? "SHUFFLE_NOREPEAT" : "NORMAL",
+      playMode: effectiveShuffle ? "SHUFFLE_NOREPEAT" : "NORMAL",
     });
     pollState(true);
     setTimeout(() => pollState(true), 800);
+    setTimeout(() => refreshQueue(true), 400);  // pre-fill cache even if drawer is closed
   } catch (e) { toast(e.message, true); }
 }
 
@@ -488,11 +493,13 @@ function renderPlayerBar(pb) {
 
 /* ---------- queue drawer ---------- */
 
-async function refreshQueue() {
-  if (!state.queueOpen || !coordinator()) return;
+async function refreshQueue(force = false) {
+  if (!force && !state.queueOpen) return;
+  if (!coordinator()) return;
   try {
     const res = await api(`/api/queue?ip=${encodeURIComponent(coordinator())}`);
-    renderQueue(res.items);
+    state.queueItems = res.items;
+    if (state.queueOpen) renderQueue(state.queueItems);
   } catch { /* leave as-is */ }
 }
 
@@ -625,7 +632,10 @@ function wireControls() {
   $("queue-toggle").addEventListener("click", () => {
     state.queueOpen = !state.queueOpen;
     drawer.classList.toggle("open", state.queueOpen);
-    if (state.queueOpen) refreshQueue();
+    if (state.queueOpen) {
+      renderQueue(state.queueItems);   // show cached items immediately
+      refreshQueue();                  // then refresh from speaker in background
+    }
   });
   $("queue-close").addEventListener("click", () => {
     state.queueOpen = false;

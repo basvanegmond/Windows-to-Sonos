@@ -301,6 +301,7 @@ class SonosController:
         dev.play_uri(uri=url, title=title, force_radio=True)
 
     def queue(self, ip: str) -> list[dict]:
+        import logging as _log
         dev = self.coordinator_of(ip)
         items = []
         try:
@@ -318,6 +319,6 @@ class SonosController:
                     "album": getattr(item, "album", ""),
                     "trackId": track_id,
                 })
-        except Exception:
-            pass
+        except Exception as exc:
+            _log.warning("get_queue failed for %s: %s", ip, exc)
         return items
