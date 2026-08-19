@@ -6,7 +6,7 @@ import json
 import re
 import subprocess
 import threading
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 
 import imageio_ffmpeg
@@ -35,6 +35,7 @@ class YouTubeItem:
     uploader: str
     duration: float
     source_url: str
+    tags: list[str] = field(default_factory=list)
 
     @property
     def audio_path(self) -> Path:
@@ -70,6 +71,7 @@ class YouTubeItem:
             "uploader": self.uploader,
             "duration": round(self.duration, 1),
             "sourceUrl": self.source_url,
+            "tags": self.tags,
         }
 
 
@@ -90,7 +92,14 @@ def _load_item(video_id: str) -> YouTubeItem | None:
         return None
     try:
         meta = json.loads(sidecar.read_text(encoding="utf-8"))
-        item = YouTubeItem(**meta)
+        item = YouTubeItem(
+            video_id=meta["video_id"],
+            title=meta["title"],
+            uploader=meta["uploader"],
+            duration=meta["duration"],
+            source_url=meta["source_url"],
+            tags=meta.get("tags", []),
+        )
         if item.audio_path.exists():
             return item
     except Exception as exc:
@@ -184,6 +193,7 @@ def fetch(url: str) -> YouTubeItem:
                 "uploader": item.uploader,
                 "duration": item.duration,
                 "source_url": item.source_url,
+                "tags": item.tags,
             }, ensure_ascii=False),
             encoding="utf-8")
         return item
@@ -224,50 +234,73 @@ def remux_faststart(path: Path) -> None:
         )
 
 
-def _load_favs() -> set[str]:
+def _load_favs() -> list[str]:
+    """Return the ordered list of favourite video IDs (user-defined order)."""
     if not FAVS_PATH.exists():
-        return set()
+        return []
     try:
-        return set(json.loads(FAVS_PATH.read_text(encoding="utf-8")).get("video_ids", []))
+        return list(json.loads(FAVS_PATH.read_text(encoding="utf-8")).get("video_ids", []))
     except Exception:
-        return set()
+        return []
 
 
-def _save_favs(favs: set[str]) -> None:
+def _save_favs(favs: list[str]) -> None:
     tmp = FAVS_PATH.with_suffix(".tmp")
     tmp.write_text(
-        json.dumps({"video_ids": sorted(favs)}, ensure_ascii=False, indent=2),
+        json.dumps({"video_ids": favs}, ensure_ascii=False, indent=2),
         encoding="utf-8",
     )
     tmp.replace(FAVS_PATH)  # atomic rename on same volume
 
 
 def favourites_set() -> set[str]:
-    return _load_favs()
+    return set(_load_favs())
 
 
 def is_favourite(video_id: str) -> bool:
-    return video_id in _load_favs()
+    return video_id in favourites_set()
 
 
 def add_favourite(video_id: str) -> None:
     with _favs_lock:
         favs = _load_favs()
-        favs.add(video_id)
+        if video_id not in favs:
+            favs.append(video_id)
         _save_favs(favs)
 
 
 def remove_favourite(video_id: str) -> None:
     with _favs_lock:
         favs = _load_favs()
-        favs.discard(video_id)
+        favs = [v for v in favs if v != video_id]
         _save_favs(favs)
 
 
+def reorder_favourites(video_ids: list[str]) -> None:
+    """Replace the favourites list with a new user-defined order.
+    Only IDs that are currently in the favourites set are kept."""
+    with _favs_lock:
+        current = set(_load_favs())
+        ordered = [v for v in video_ids if v in current]
+        _save_favs(ordered)
+
+
 def list_favourites() -> list[YouTubeItem]:
-    """Cached items that are marked as favourites, newest first."""
-    favs = _load_favs()
-    return [item for item in list_items() if item.video_id in favs]
+    """Cached items that are marked as favourites, in user-defined order."""
+    by_id = {item.video_id: item for item in list_items()}
+    return [by_id[vid] for vid in _load_favs() if vid in by_id]
+
+
+def update_tags(video_id: str, tags: list[str]) -> None:
+    """Overwrite the tags list on a video's sidecar file."""
+    sidecar = _sidecar(video_id)
+    if not sidecar.exists():
+        raise FileNotFoundError(f"No sidecar for {video_id}")
+    meta = json.loads(sidecar.read_text(encoding="utf-8"))
+    meta["tags"] = tags
+    tmp = sidecar.with_suffix(".tmp")
+    tmp.write_text(json.dumps(meta, ensure_ascii=False), encoding="utf-8")
+    tmp.replace(sidecar)
 
 
 def list_items() -> list[YouTubeItem]:

@@ -854,6 +854,50 @@ svg { width: 18px; height: 18px; flex-shrink: 0; }
 .fav-btn svg { transition: transform 0.15s var(--ease); }
 .fav-btn:hover svg { transform: scale(1.2); }
 
+/* drag handle */
+.yt-drag-handle {
+  display: flex; align-items: center; justify-content: center;
+  width: 20px; flex-shrink: 0;
+  color: var(--text-faint); cursor: grab; opacity: 0;
+  transition: opacity 0.15s;
+}
+.yt-fav-row:hover .yt-drag-handle { opacity: 1; }
+.yt-fav-row.dragging { opacity: 0.4; }
+
+/* tag pills */
+.yt-tag-pills { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 5px; }
+.yt-tag-pill {
+  font-size: 10px; padding: 1px 7px; border-radius: 20px;
+  background: var(--surface-2); color: var(--text-dim);
+  border: 1px solid var(--line);
+}
+
+/* tag edit input */
+.yt-tag-edit-row { margin-top: 5px; }
+.yt-tag-input {
+  width: 100%; font-size: 11px;
+  padding: 3px 7px; border-radius: 6px;
+  background: var(--surface); border: 1px solid var(--accent);
+  color: var(--text); outline: none;
+}
+
+/* tag filter bar */
+.yt-tag-filter-bar {
+  display: flex; flex-wrap: wrap; gap: 6px;
+  margin-bottom: 10px;
+}
+.yt-tag-filter-btn {
+  font-size: 11px; padding: 3px 10px; border-radius: 20px;
+  background: var(--surface); border: 1px solid var(--line);
+  color: var(--text-dim); cursor: pointer;
+  transition: background 0.15s, color 0.15s, border-color 0.15s;
+}
+.yt-tag-filter-btn:hover { background: var(--surface-2); color: var(--text); }
+.yt-tag-filter-btn.active {
+  background: var(--accent); border-color: var(--accent);
+  color: #fff;
+}
+
 /* ============ RADIO VIEW ============ */
 
 .radio-add-btn { margin-bottom: 6px; }

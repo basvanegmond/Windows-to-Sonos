@@ -176,6 +176,10 @@ class SonosController:
                     dev.join(coordinator)
                 elif ip not in selected and in_group:
                     dev.unjoin()
+                    try:
+                        dev.stop()
+                    except Exception:
+                        pass
             except Exception:
                 pass
         return coordinator

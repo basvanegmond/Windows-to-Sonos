@@ -170,6 +170,7 @@ async function toggleSpeaker(ip) {
         ...state.selected.filter((i) => i !== res.coordinatorIp)];
     } catch (e) { toast(e.message, true); }
   }
+  localStorage.setItem("selectedSpeakers", JSON.stringify(state.selected));
   renderSpeakers();
   pollState(true);
 }
@@ -886,6 +887,9 @@ function renderVolumeOverlay() {
 const HEART_OUTLINE = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M20.84 4.61a5.5 5.5 0 0 0-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 0 0-7.78 7.78l1.06 1.06L12 21.23l7.78-7.78 1.06-1.06a5.5 5.5 0 0 0 0-7.78z"/></svg>`;
 const HEART_FILLED = `<svg viewBox="0 0 24 24" fill="currentColor" stroke="none"><path d="M20.84 4.61a5.5 5.5 0 0 0-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 0 0-7.78 7.78l1.06 1.06L12 21.23l7.78-7.78 1.06-1.06a5.5 5.5 0 0 0 0-7.78z"/></svg>`;
 
+const TAG_SVG = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" width="14" height="14"><path d="M20.59 13.41l-7.17 7.17a2 2 0 0 1-2.83 0L2 12V2h10l8.59 8.59a2 2 0 0 1 0 2.82z"/><line x1="7" y1="7" x2="7.01" y2="7"/></svg>`;
+const DRAG_SVG = `<svg viewBox="0 0 24 24" fill="currentColor" width="14" height="14"><circle cx="9" cy="6" r="1.5"/><circle cx="15" cy="6" r="1.5"/><circle cx="9" cy="12" r="1.5"/><circle cx="15" cy="12" r="1.5"/><circle cx="9" cy="18" r="1.5"/><circle cx="15" cy="18" r="1.5"/></svg>`;
+
 async function renderYtFavourites(content) {
   $("view-title").textContent = "YT Favourites";
   content.innerHTML = "";
@@ -908,35 +912,174 @@ async function renderYtFavourites(content) {
     return;
   }
 
-  const list = document.createElement("div");
-  list.className = "yt-fav-list";
-  for (const item of items) {
-    const el = document.createElement("div");
-    el.className = "yt-fav-row";
-    el.innerHTML = `
-      <img class="yt-fav-thumb" src="/art/yt-${esc(item.videoId)}" alt="" onerror="this.style.visibility='hidden'">
-      <div class="yt-fav-meta">
+  let activeTag = null;
+
+  function buildTagPills(tags, videoId, metaEl) {
+    const pillRow = document.createElement("div");
+    pillRow.className = "yt-tag-pills";
+    (tags || []).forEach(t => {
+      const pill = document.createElement("span");
+      pill.className = "yt-tag-pill";
+      pill.textContent = t;
+      pillRow.appendChild(pill);
+    });
+    return pillRow;
+  }
+
+  function renderRows() {
+    const filtered = activeTag ? items.filter(it => (it.tags || []).includes(activeTag)) : items;
+    list.innerHTML = "";
+    filtered.forEach((item, filteredIdx) => {
+      const realIdx = items.indexOf(item);
+      const el = document.createElement("div");
+      el.className = "yt-fav-row";
+      el.draggable = false; // only enable from handle mousedown
+
+      const handle = document.createElement("span");
+      handle.className = "yt-drag-handle";
+      handle.title = "Drag to reorder";
+      handle.innerHTML = DRAG_SVG;
+      handle.addEventListener("mousedown", () => { el.draggable = true; });
+      handle.addEventListener("mouseup", () => { el.draggable = false; });
+
+      const thumb = document.createElement("img");
+      thumb.className = "yt-fav-thumb";
+      thumb.src = `/art/yt-${esc(item.videoId)}`;
+      thumb.alt = "";
+      thumb.onerror = () => { thumb.style.visibility = "hidden"; };
+
+      const meta = document.createElement("div");
+      meta.className = "yt-fav-meta";
+      meta.innerHTML = `
         <div class="yt-fav-title">${esc(item.title)}</div>
         <div class="yt-fav-sub mono">${esc(item.uploader)} &middot; ${fmtTime(item.duration)}</div>
-      </div>
-      <div class="yt-fav-actions">
-        <button class="btn btn-primary btn-sm" data-act="play">${PLAY_SVG} Play</button>
-        <button class="icon-btn" title="Add to queue" data-act="queue">${ADD_SVG}</button>
-        <button class="icon-btn fav-btn on" title="Remove from favourites" data-act="unfav">${HEART_FILLED}</button>
-      </div>
-    `;
-    el.querySelector('[data-act="play"]').addEventListener("click", () => playTracks([item.trackId]));
-    el.querySelector('[data-act="queue"]').addEventListener("click", () => addToQueue([item.trackId]));
-    el.querySelector('[data-act="unfav"]').addEventListener("click", async () => {
-      try {
-        await api(`/api/youtube/${encodeURIComponent(item.videoId)}/favourite`, undefined, "DELETE");
-        toast("Removed from favourites");
-        if (state.view === "yt-favs") renderYtFavourites($("content"));
-      } catch (e) { toast(e.message, true); }
+      `;
+      meta.appendChild(buildTagPills(item.tags, item.videoId, meta));
+
+      const actions = document.createElement("div");
+      actions.className = "yt-fav-actions";
+
+      const playBtn = document.createElement("button");
+      playBtn.className = "btn btn-primary btn-sm";
+      playBtn.innerHTML = `${PLAY_SVG} Play`;
+      playBtn.addEventListener("click", () => playTracks([item.trackId]));
+
+      const queueBtn = document.createElement("button");
+      queueBtn.className = "icon-btn";
+      queueBtn.title = "Add to queue";
+      queueBtn.innerHTML = ADD_SVG;
+      queueBtn.addEventListener("click", () => addToQueue([item.trackId]));
+
+      const tagBtn = document.createElement("button");
+      tagBtn.className = "icon-btn";
+      tagBtn.title = "Edit tags";
+      tagBtn.innerHTML = TAG_SVG;
+      tagBtn.addEventListener("click", () => {
+        const existing = meta.querySelector(".yt-tag-edit-row");
+        if (existing) { existing.remove(); return; }
+        const editRow = document.createElement("div");
+        editRow.className = "yt-tag-edit-row";
+        const inp = document.createElement("input");
+        inp.type = "text";
+        inp.className = "yt-tag-input";
+        inp.placeholder = "e.g. chill, morning";
+        inp.value = (item.tags || []).join(", ");
+        const confirm = async () => {
+          const newTags = inp.value.split(",").map(t => t.trim()).filter(Boolean);
+          editRow.remove();
+          try {
+            await api(`/api/youtube/${encodeURIComponent(item.videoId)}/tags`, { tags: newTags }, "PUT");
+            item.tags = newTags;
+            // refresh pill row
+            const oldPills = meta.querySelector(".yt-tag-pills");
+            if (oldPills) oldPills.remove();
+            meta.appendChild(buildTagPills(newTags, item.videoId, meta));
+            rebuildFilterBar();
+          } catch (e) { toast(e.message, true); }
+        };
+        inp.addEventListener("keydown", e => { if (e.key === "Enter") confirm(); if (e.key === "Escape") editRow.remove(); });
+        inp.addEventListener("blur", () => { setTimeout(() => { if (document.contains(inp)) confirm(); }, 150); });
+        editRow.appendChild(inp);
+        meta.appendChild(editRow);
+        inp.focus();
+      });
+
+      const unfavBtn = document.createElement("button");
+      unfavBtn.className = "icon-btn fav-btn on";
+      unfavBtn.title = "Remove from favourites";
+      unfavBtn.innerHTML = HEART_FILLED;
+      unfavBtn.addEventListener("click", async () => {
+        try {
+          await api(`/api/youtube/${encodeURIComponent(item.videoId)}/favourite`, undefined, "DELETE");
+          toast("Removed from favourites");
+          items = items.filter(i => i.videoId !== item.videoId);
+          renderRows();
+          rebuildFilterBar();
+        } catch (e) { toast(e.message, true); }
+      });
+
+      actions.append(playBtn, queueBtn, tagBtn, unfavBtn);
+      el.append(handle, thumb, meta, actions);
+
+      // drag-and-drop
+      el.addEventListener("dragstart", e => {
+        e.dataTransfer.effectAllowed = "move";
+        e.dataTransfer.setData("text/plain", String(realIdx));
+        el.classList.add("dragging");
+      });
+      el.addEventListener("dragend", () => {
+        el.draggable = false;
+        el.classList.remove("dragging");
+      });
+      el.addEventListener("dragover", e => { e.preventDefault(); e.dataTransfer.dropEffect = "move"; });
+      el.addEventListener("drop", e => {
+        e.preventDefault();
+        const fromIdx = parseInt(e.dataTransfer.getData("text/plain"), 10);
+        const toIdx = realIdx;
+        if (fromIdx === toIdx) return;
+        const moved = items.splice(fromIdx, 1)[0];
+        items.splice(toIdx, 0, moved);
+        renderRows();
+        api("/api/youtube/favourites/order", { video_ids: items.map(i => i.videoId) }, "PUT")
+          .catch(err => toast("Reorder failed: " + err.message, true));
+      });
+
+      list.appendChild(el);
     });
-    list.appendChild(el);
+
+    if (!list.children.length) {
+      list.innerHTML = `<div class="empty-state"><p>No items match the selected tag.</p></div>`;
+    }
   }
-  content.appendChild(list);
+
+  function rebuildFilterBar() {
+    const allTags = [...new Set(items.flatMap(i => i.tags || []))];
+    filterBar.innerHTML = "";
+    if (!allTags.length) { filterBar.style.display = "none"; return; }
+    filterBar.style.display = "";
+    const clearBtn = document.createElement("button");
+    clearBtn.className = "yt-tag-filter-btn" + (activeTag === null ? " active" : "");
+    clearBtn.textContent = "All";
+    clearBtn.addEventListener("click", () => { activeTag = null; rebuildFilterBar(); renderRows(); });
+    filterBar.appendChild(clearBtn);
+    allTags.forEach(tag => {
+      const btn = document.createElement("button");
+      btn.className = "yt-tag-filter-btn" + (activeTag === tag ? " active" : "");
+      btn.textContent = tag;
+      btn.addEventListener("click", () => { activeTag = tag; rebuildFilterBar(); renderRows(); });
+      filterBar.appendChild(btn);
+    });
+  }
+
+  const filterBar = document.createElement("div");
+  filterBar.className = "yt-tag-filter-bar";
+  const list = document.createElement("div");
+  list.className = "yt-fav-list";
+
+  rebuildFilterBar();
+  renderRows();
+
+  content.append(filterBar, list);
 }
 
 /* ---------- radio view ---------- */
@@ -1287,20 +1430,16 @@ async function loadSpeakers() {
     const res = await api("/api/speakers");
     state.speakers = res.speakers;
     $("server-info").textContent = `serving ${res.serverIp}`;
+    // Restore saved selection on first load (state.selected is empty only at boot time).
+    if (!state.selected.length) {
+      const saved = JSON.parse(localStorage.getItem("selectedSpeakers") || "[]");
+      state.selected = saved.filter(ip => state.speakers.find(s => s.ip === ip && s.reachable));
+    }
     // Drop any selected IPs that are now unreachable
     state.selected = state.selected.filter(ip => {
       const sp = state.speakers.find(s => s.ip === ip);
       return sp && sp.reachable;
     });
-    // If our coordinator left the group, update state.selected from coordinatorIp data
-    if (state.selected.length) {
-      const coordIp = state.selected[0];
-      state.speakers.forEach(sp => {
-        if (sp.reachable && sp.coordinatorIp === coordIp && !state.selected.includes(sp.ip)) {
-          state.selected.push(sp.ip);
-        }
-      });
-    }
     renderSpeakers();
     if (!$("vol-backdrop").hidden) renderVolumeOverlay();
   } catch (e) {

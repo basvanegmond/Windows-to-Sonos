@@ -311,6 +311,34 @@ def youtube_remove_fav(video_id: str):
     return {"ok": True}
 
 
+class FavsOrderRequest(BaseModel):
+    video_ids: list[str]
+
+
+@app.put("/api/youtube/favourites/order")
+def youtube_reorder_favs(req: FavsOrderRequest):
+    if any(not re.fullmatch(r"[A-Za-z0-9_-]{11}", v) for v in req.video_ids):
+        raise HTTPException(400, "Invalid video ID in list")
+    youtube.reorder_favourites(req.video_ids)
+    return {"ok": True}
+
+
+class TagsRequest(BaseModel):
+    tags: list[str]
+
+
+@app.put("/api/youtube/{video_id}/tags")
+def youtube_update_tags(video_id: str, req: TagsRequest):
+    if not re.fullmatch(r"[A-Za-z0-9_-]{11}", video_id):
+        raise HTTPException(400, "Invalid video ID")
+    cleaned = [t.strip() for t in req.tags if t.strip()]
+    try:
+        youtube.update_tags(video_id, cleaned)
+    except FileNotFoundError:
+        raise HTTPException(404, "Video not in cache")
+    return {"ok": True}
+
+
 @app.delete("/api/youtube/{video_id}")
 def youtube_delete(video_id: str):
     if not re.fullmatch(r"[A-Za-z0-9_-]{11}", video_id):
