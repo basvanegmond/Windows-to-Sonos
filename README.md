@@ -78,20 +78,48 @@ New-NetFirewallRule -DisplayName "Windows-to-Sonos" -Direction Inbound `
 Add more folders or speakers and restart the server (or use **Rescan
 Library** in the sidebar for new music).
 
-## Auto-start on login
+## Running it in the background (and keeping it there)
 
-To have the server start automatically and restart itself if it ever
-crashes, register a Windows Scheduled Task once:
+Register the Windows Scheduled Task once; re-running the script is safe and
+replaces the existing task:
 
 ```powershell
 cd Windows-to-Sonos
 .\setup_autostart.ps1
 ```
 
-This runs `run_server.bat` at logon and retries automatically on failure.
+The task starts the server at logon **and** re-checks it every 5 minutes, so
+it comes back on its own after a crash, a kill, a sleep/resume or a reboot.
+The task action points straight at `.venv\Scripts\pythonw.exe app.py`, so the
+task instance *is* the server process: Windows sees it stop the moment it
+dies, and the 5-minute repetition starts it again (`MultipleInstances =
+IgnoreNew` means the repetition does nothing while the server is healthy).
+
 Startup crashes are logged to `logs\server.log` (there's no terminal to read
-them from once the server runs this way). Remove it later with
+them from once the server runs this way). Remove the task later with
 `Unregister-ScheduledTask -TaskName "Windows-to-Sonos"`.
+
+### Bring it back up right now
+
+```powershell
+Start-ScheduledTask -TaskName "Windows-to-Sonos"
+Invoke-RestMethod http://127.0.0.1:8756/api/health
+```
+
+`/api/health` answers `ok`, the LAN IP it advertises to the speakers, the
+track count and the uptime in seconds. It touches no Sonos device, so it
+still answers when every speaker is off. If the task is missing, run
+`.\setup_autostart.ps1`; to start it once by hand instead, run
+`.venv\Scripts\python.exe app.py` from the project folder.
+
+### Why it kept dropping offline
+
+The task used to launch `run_server.bat`, which launched `run_server.vbs`,
+which spawned Python detached and exited immediately. Task Scheduler saw a
+task that "completed successfully" a second after logon and held no handle on
+the Python process, so its restart policy could never fire: once the server
+died, nothing was watching. The task now runs the interpreter directly, with
+the repeating keep-alive trigger above.
 
 ## Lossless & hi-res
 
@@ -109,3 +137,6 @@ in `.cache/transcode/`, so it only happens the first time you play a track.
 | New music missing | Sidebar → Rescan Library |
 | Wrong laptop IP after switching networks | Restart the server — the LAN IP is auto-detected at startup |
 | Everything fails at once ("Failed to fetch" on every action, not just YouTube) | The server process itself isn't running/listening — check `logs\server.log` for a startup crash traceback, then restart it |
+| `http://127.0.0.1:8756` won't load at all | `Start-ScheduledTask -TaskName "Windows-to-Sonos"`, then `Invoke-RestMethod http://127.0.0.1:8756/api/health`. No such task → run `.\setup_autostart.ps1` |
+| It keeps going offline every few days | Confirm the task is the current version (`Get-ScheduledTask -TaskName "Windows-to-Sonos"` should show the action pointing at `pythonw.exe`, not `run_server.bat`); re-run `.\setup_autostart.ps1` if not |
+| Offline after the laptop sleeps or the network changes | The keep-alive brings the process back within 5 minutes, but the LAN IP is only detected at startup — if the laptop got a new IP, restart the task rather than waiting |

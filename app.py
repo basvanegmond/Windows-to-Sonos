@@ -5,6 +5,7 @@ import json
 import logging
 import os
 import re
+import time
 from pathlib import Path
 
 import uvicorn
@@ -43,6 +44,7 @@ def resolve_track(track_id: str) -> Track | None:
     return library.tracks.get(track_id) or yt_tracks.get(track_id)
 
 app = FastAPI(title="Windows to Sonos")
+_STARTED_AT = time.monotonic()
 
 
 # ---------- request models ----------
@@ -145,6 +147,21 @@ def _sonos_call(fn, *args, **kwargs):
         return fn(*args, **kwargs)
     except Exception as exc:
         raise HTTPException(502, f"Sonos error: {exc}") from exc
+
+
+# ---------- health ----------
+
+@app.get("/api/health")
+def health():
+    """Cheap liveness probe: touches no Sonos device, so it answers even when
+    every speaker is off. The auto-start keep-alive check polls this."""
+    return {
+        "ok": True,
+        "serverIp": sonos.server_ip,
+        "port": config["port"],
+        "trackCount": len(library.tracks),
+        "uptimeSeconds": round(time.monotonic() - _STARTED_AT, 1),
+    }
 
 
 # ---------- library ----------
@@ -496,8 +513,25 @@ def radio_play(station_id: str, req: RadioPlayRequest):
 app.mount("/", StaticFiles(directory=BASE_DIR / "static", html=True), name="static")
 
 
+def _port_in_use(port: int) -> bool:
+    """True if something already answers on this port locally. Checked before
+    the (slow) library scan so a duplicate launch exits immediately instead of
+    dying on bind after 20 seconds of scanning."""
+    import socket
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
+        sock.settimeout(0.5)
+        return sock.connect_ex(("127.0.0.1", port)) == 0
+
+
 if __name__ == "__main__":
     try:
+        if _port_in_use(config["port"]):
+            # Another copy is already serving, e.g. the Scheduled Task started
+            # one and this is the 5-minute keep-alive (or a manual launch).
+            # Exit 0 and quietly: nothing is wrong, and logs/server.log should
+            # not fill up with tracebacks every few minutes.
+            print(f"Port {config['port']} is already in use - server is already running.")
+            raise SystemExit(0)
         print("Scanning music library...")
         library.scan()
         print(f"  {len(library.tracks)} tracks in {len(library.albums)} albums")

@@ -48,7 +48,9 @@
 
 ## Key Commands
 - `.venv/Scripts/python.exe app.py` — start the server (scans library, serves UI)
-- Open `http://localhost:8756` in a browser
+- Open `http://127.0.0.1:8756` in a browser (never `localhost`, see gotchas)
+- `Start-ScheduledTask -TaskName "Windows-to-Sonos"` — bring the background server back up
+- `Invoke-RestMethod http://127.0.0.1:8756/api/health` — is it actually listening?
 - Deps: `.venv/Scripts/python.exe -m pip install -r requirements.txt imageio-ffmpeg`
 
 ## Speakers (LAN)
@@ -73,6 +75,17 @@
 - **Never advertise `localhost`** — on this machine it resolves to IPv6 `::1`
   first and every request stalls ~2s against the IPv4-only uvicorn. Always
   use `http://127.0.0.1:8756`.
+- **Background running is a Scheduled Task, and it must own the process.**
+  `setup_autostart.ps1` points the task action straight at
+  `.venv\Scripts\pythonw.exe app.py`. Never route it back through
+  `run_server.bat`/`run_server.vbs`: those detach and return, so Task
+  Scheduler marks the task finished at logon, holds no handle on Python and
+  can never restart it — that is why the server kept dropping offline. A
+  second, repeating trigger (every 5 min, `MultipleInstances = IgnoreNew`)
+  is the watchdog.
+- `GET /api/health` is the liveness probe: no Sonos calls, so it answers with
+  every speaker off. Use it to check whether the server or the speakers are
+  the problem.
 - The `.claude/hooks/pre-commit.sh` hook is scaffold boilerplate for TS
   projects; it now exits early when no `package.json`/`tsconfig.json` exists.
   This is a Python project — don't re-enable TS checks.
