@@ -317,8 +317,18 @@ class SonosController:
         except Exception as exc:
             _log.warning("bulk get_queue failed (%s); retrying item by item", exc)
 
+        # Ask the speaker how long the queue actually is. Without this the loop
+        # cannot tell "item failed to parse" from "past the end of the queue",
+        # and a systemic parse failure fills the drawer with hundreds of
+        # placeholder rows instead of the handful of tracks really queued.
+        try:
+            total = min(int(dev.queue_size), limit)
+        except Exception as exc:
+            _log.warning("queue_size unavailable (%s); reading until the queue ends", exc)
+            total = limit
+
         items: list = []
-        for i in range(limit):
+        for i in range(total):
             try:
                 chunk = list(dev.get_queue(start=i, max_items=1))
             except Exception as exc:
