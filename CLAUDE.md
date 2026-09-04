@@ -83,6 +83,13 @@
   can never restart it — that is why the server kept dropping offline. A
   second, repeating trigger (every 5 min, `MultipleInstances = IgnoreNew`)
   is the watchdog.
+- **`pythonw.exe` has no stdout, and uvicorn dies on that.** Both `sys.stdout`
+  and `sys.stderr` are `None` under pythonw; uvicorn's default log config
+  calls `sys.stdout.isatty()` when building its formatter and blows up with
+  "Unable to configure formatter 'default'" before serving anything. `app.py`
+  calls `_ensure_streams()` first thing in `__main__` to point both at
+  `logs/server.log`. Never remove it, and never conclude "it works when I run
+  it by hand" means the background launch works.
 - `GET /api/health` is the liveness probe: no Sonos calls, so it answers with
   every speaker off. Use it to check whether the server or the speakers are
   the problem.

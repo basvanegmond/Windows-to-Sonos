@@ -5,6 +5,7 @@ import json
 import logging
 import os
 import re
+import sys
 import time
 from pathlib import Path
 
@@ -513,6 +514,31 @@ def radio_play(station_id: str, req: RadioPlayRequest):
 app.mount("/", StaticFiles(directory=BASE_DIR / "static", html=True), name="static")
 
 
+def _ensure_streams() -> None:
+    """Give the process real stdout/stderr when launched by pythonw.exe.
+
+    pythonw hands the process no console at all: sys.stdout and sys.stderr are
+    both None. uvicorn's default log config calls sys.stdout.isatty() while
+    building its formatter, so it dies before serving a single request with
+
+        AttributeError: 'NoneType' object has no attribute 'isatty'
+        ValueError: Unable to configure formatter 'default'
+
+    which is invisible unless you go looking, because there is no console to
+    print it to. Pointing both streams at logs/server.log fixes the crash and
+    leaves a log worth reading. Running under python.exe changes nothing.
+    """
+    if sys.stdout is not None and sys.stderr is not None:
+        return
+    log_dir = BASE_DIR / "logs"
+    log_dir.mkdir(exist_ok=True)
+    stream = (log_dir / "server.log").open("a", encoding="utf-8", buffering=1)
+    if sys.stdout is None:
+        sys.stdout = stream
+    if sys.stderr is None:
+        sys.stderr = stream
+
+
 def _port_in_use(port: int) -> bool:
     """True if something already answers on this port locally. Checked before
     the (slow) library scan so a duplicate launch exits immediately instead of
@@ -525,6 +551,7 @@ def _port_in_use(port: int) -> bool:
 
 if __name__ == "__main__":
     try:
+        _ensure_streams()
         if _port_in_use(config["port"]):
             # Another copy is already serving, e.g. the Scheduled Task started
             # one and this is the 5-minute keep-alive (or a manual launch).
