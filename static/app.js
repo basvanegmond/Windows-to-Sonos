@@ -401,7 +401,8 @@ async function addToQueue(trackIds) {
   try {
     await api("/api/queue/add", { ip: coordinator(), trackIds });
     toast(`Added ${trackIds.length} track${trackIds.length > 1 ? "s" : ""} to queue`);
-    refreshQueue();
+    refreshQueue(true);   // force: the drawer is usually closed, and without
+                          // this the cached queue stays stale until reopened
   } catch (e) { toast(e.message, true); }
 }
 
@@ -1300,6 +1301,10 @@ async function submitYt(addToQueue) {
       : `Playing: ${res.item.title}`);
     refreshYtList();
     setTimeout(() => pollState(true), 800);
+    // YouTube plays and queue-adds go through the same Sonos queue as albums,
+    // so the drawer has to be refreshed here too - it was not, which made a
+    // queued video look like it had never been added.
+    setTimeout(() => refreshQueue(true), 800);
   } catch (e) {
     setYtStatus(e.message, true);
   } finally {
