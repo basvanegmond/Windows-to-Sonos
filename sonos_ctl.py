@@ -101,6 +101,12 @@ class SonosController:
             protocol_info=f"http-get:*:{mime}:*",
             duration=self._hms(duration) if duration else None,
         )
+        # Only pass original_track_number when there is one. Passing None makes
+        # SoCo serialise the literal string "None" into the DIDL; Sonos stores
+        # it and hands it straight back, and reading the queue then dies on
+        # int("None"). YouTube tracks have track_no 0, which is how a single
+        # queued video made the entire queue unreadable.
+        extra = {"original_track_number": track.track_no} if track.track_no else {}
         return DidlMusicTrack(
             title=track.title,
             parent_id="-1",
@@ -108,8 +114,8 @@ class SonosController:
             creator=track.artist,
             album=track.album,
             album_art_uri=self.art_url(album_id),
-            original_track_number=track.track_no or None,
             resources=[res],
+            **extra,
         )
 
 
@@ -304,61 +310,91 @@ class SonosController:
         dev = self.coordinator_of(ip)
         dev.play_uri(uri=url, title=title, force_radio=True)
 
-    def _queue_raw(self, dev, limit: int = 500) -> list:
-        """Fetch the speaker's queue, tolerating individual items SoCo cannot
-        parse. One unparseable item used to take the whole queue with it: the
-        bulk get_queue() raised, the caller swallowed it, and the UI showed an
-        empty queue even though the album tracks in it were fine. Falling back
-        to one request per item keeps the good ones, and keeps their positions,
-        which /api/queue/jump indexes into."""
-        import logging as _log
-        try:
-            return list(dev.get_queue(max_items=limit))
-        except Exception as exc:
-            _log.warning("bulk get_queue failed (%s); retrying item by item", exc)
+    # DIDL-Lite namespaces, for reading the queue without SoCo's strict parser.
+    _DIDL_NS = "{urn:schemas-upnp-org:metadata-1-0/DIDL-Lite/}"
+    _DC_NS = "{http://purl.org/dc/elements/1.1/}"
+    _UPNP_NS = "{urn:schemas-upnp-org:metadata-1-0/upnp/}"
 
-        # Ask the speaker how long the queue actually is. Without this the loop
-        # cannot tell "item failed to parse" from "past the end of the queue",
-        # and a systemic parse failure fills the drawer with hundreds of
-        # placeholder rows instead of the handful of tracks really queued.
+    def _queue_via_browse(self, dev, limit: int = 500) -> list[dict]:
+        """Read the queue straight from ContentDirectory and pull out the four
+        fields the UI needs.
+
+        SoCo's get_queue() builds a full DIDL object per item and raises on any
+        field it cannot coerce, so one malformed value loses the whole queue.
+        The drawer only shows a title, an artist and an album, none of which
+        need that strictness. Reading the XML directly also means queues that
+        already contain items written by the old buggy code stay readable.
+        """
+        import xml.etree.ElementTree as ET
+        result = dev.contentDirectory.Browse([
+            ("ObjectID", "Q:0"),
+            ("BrowseFlag", "BrowseDirectChildren"),
+            ("Filter", "*"),
+            ("StartingIndex", 0),
+            ("RequestedCount", limit),
+            ("SortCriteria", ""),
+        ])
+        rows = []
+        for item in ET.fromstring(result["Result"]).findall(f"{self._DIDL_NS}item"):
+            res = item.find(f"{self._DIDL_NS}res")
+            rows.append({
+                "title": item.findtext(f"{self._DC_NS}title") or "",
+                "artist": item.findtext(f"{self._DC_NS}creator") or "",
+                "album": item.findtext(f"{self._UPNP_NS}album") or "",
+                "uri": (res.text or "") if res is not None else "",
+            })
+        return rows
+
+    def _queue_via_soco(self, dev, limit: int = 500) -> list[dict]:
+        """Fallback reader: SoCo item by item, so one unparseable entry costs
+        its own row rather than the whole queue. Positions are preserved, since
+        /api/queue/jump indexes into them."""
+        import logging as _log
         try:
             total = min(int(dev.queue_size), limit)
         except Exception as exc:
             _log.warning("queue_size unavailable (%s); reading until the queue ends", exc)
             total = limit
 
-        items: list = []
+        rows: list[dict] = []
         for i in range(total):
             try:
                 chunk = list(dev.get_queue(start=i, max_items=1))
             except Exception as exc:
                 _log.warning("queue item %d is unparseable, keeping its slot: %s", i, exc)
-                items.append(None)   # placeholder: positions must stay aligned
+                rows.append({"title": "Unreadable item", "artist": "", "album": "", "uri": ""})
                 continue
             if not chunk:
                 break
-            items.append(chunk[0])
-        return items
-
-    def queue(self, ip: str) -> list[dict]:
-        dev = self.coordinator_of(ip)
-        items = []
-        marker = f":{self.server_port}/stream/"
-        for item in self._queue_raw(dev):
-            if item is None:
-                items.append({"title": "Unreadable item", "artist": "",
-                              "album": "", "trackId": None})
-                continue
+            item = chunk[0]
             uri = ""
             if item.resources:
                 uri = item.resources[0].uri or ""
-            track_id = None
-            if marker in uri:
-                track_id = uri.split(marker, 1)[1].split(".")[0]
-            items.append({
+            rows.append({
                 "title": getattr(item, "title", ""),
                 "artist": getattr(item, "creator", ""),
                 "album": getattr(item, "album", ""),
-                "trackId": track_id,
+                "uri": uri,
             })
+        return rows
+
+    def queue(self, ip: str) -> list[dict]:
+        import logging as _log
+        dev = self.coordinator_of(ip)
+        try:
+            rows = self._queue_via_browse(dev)
+        except Exception as exc:
+            _log.warning("raw queue browse failed (%s); falling back to SoCo", exc)
+            try:
+                rows = self._queue_via_soco(dev)
+            except Exception as exc2:
+                _log.warning("SoCo queue read failed too for %s: %s", ip, exc2)
+                return []
+
+        marker = f":{self.server_port}/stream/"
+        items = []
+        for row in rows:
+            uri = row.pop("uri", "")
+            track_id = uri.split(marker, 1)[1].split(".")[0] if marker in uri else None
+            items.append({**row, "trackId": track_id})
         return items
