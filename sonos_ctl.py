@@ -226,6 +226,32 @@ class SonosController:
             kwargs = {"position": insert_at + i} if insert_at is not None else {}
             dev.add_to_queue(self._didl(track, album_id), **kwargs)
 
+    def remove_from_queue(self, ip: str, index: int) -> None:
+        """Drop one track. `index` is 0-based, matching the list the UI renders."""
+        self.coordinator_of(ip).remove_from_queue(index)
+
+    def move_in_queue(self, ip: str, from_index: int, to_index: int) -> None:
+        """Move one track within the queue, both indices 0-based.
+
+        ReorderTracksInQueue is 1-based, and InsertBefore is read against the
+        numbering *before* the move: dragging an item downwards therefore needs
+        one extra position, because its own slot is still occupied when the
+        speaker evaluates the target.
+        """
+        if from_index == to_index:
+            return
+        insert_before = to_index + 1 if to_index < from_index else to_index + 2
+        self.coordinator_of(ip).avTransport.ReorderTracksInQueue([
+            ("InstanceID", 0),
+            ("StartingIndex", from_index + 1),
+            ("NumberOfTracks", 1),
+            ("InsertBefore", insert_before),
+            ("UpdateID", 0),
+        ])
+
+    def clear_queue(self, ip: str) -> None:
+        self.coordinator_of(ip).clear_queue()
+
     def transport(self, ip: str, action: str) -> None:
         dev = self.coordinator_of(ip)
         if action == "play":

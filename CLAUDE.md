@@ -41,6 +41,17 @@
 ## YouTube Streaming
 - UI: header YouTube button opens an overlay (deliberately separate from the
   album library — user preference). Paste URL → Play or Queue.
+- Queue editing: `POST /api/queue/remove {ip, index}`, `/api/queue/move
+  {ip, fromIndex, toIndex}`, `/api/queue/clear {ip}`. Indices are 0-based
+  everywhere in the API; Sonos's own `ReorderTracksInQueue` is 1-based and
+  reads `InsertBefore` against the pre-move numbering, which
+  `sonos_ctl.move_in_queue` handles.
+- **Never pass `original_track_number=None` into a DIDL item.** SoCo writes the
+  literal string "None", Sonos stores and returns it, and reading the queue
+  back dies on `int("None")` - taking every other item in that queue with it.
+  YouTube tracks have no track number, which is how one queued video made the
+  whole queue unreadable. `sonos_ctl.queue()` now reads the queue straight from
+  ContentDirectory rather than through SoCo's strict parser.
 - Backend: `POST /api/youtube {url, ip?, addToQueue?}` fetches best-audio m4a
   via yt-dlp (single videos only, no playlists), caches by video id, and plays
   through the normal `/stream` pipeline. Track ids are `yt<video_id>`, art ids

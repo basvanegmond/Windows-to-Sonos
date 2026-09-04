@@ -109,6 +109,21 @@ class QueueJumpRequest(BaseModel):
     index: int
 
 
+class QueueRemoveRequest(BaseModel):
+    ip: str
+    index: int
+
+
+class QueueMoveRequest(BaseModel):
+    ip: str
+    fromIndex: int
+    toIndex: int
+
+
+class QueueClearRequest(BaseModel):
+    ip: str
+
+
 class RadioAddRequest(BaseModel):
     name: str
     url: str
@@ -414,6 +429,24 @@ def queue_add(req: QueueAddRequest):
 @app.post("/api/queue/jump")
 def queue_jump(req: QueueJumpRequest):
     _sonos_call(sonos.play_from_queue, req.ip, req.index)
+    return {"ok": True}
+
+
+@app.post("/api/queue/remove")
+def queue_remove(req: QueueRemoveRequest):
+    _sonos_call(sonos.remove_from_queue, req.ip, req.index)
+    return {"ok": True}
+
+
+@app.post("/api/queue/move")
+def queue_move(req: QueueMoveRequest):
+    _sonos_call(sonos.move_in_queue, req.ip, req.fromIndex, req.toIndex)
+    return {"ok": True}
+
+
+@app.post("/api/queue/clear")
+def queue_clear(req: QueueClearRequest):
+    _sonos_call(sonos.clear_queue, req.ip)
     return {"ok": True}
 
 

@@ -505,6 +505,49 @@ async function refreshQueue(force = false) {
   } catch { /* leave as-is */ }
 }
 
+async function removeFromQueue(index) {
+  if (!coordinator()) return;
+  const previous = state.queueItems;
+  state.queueItems = previous.filter((_, i) => i !== index);
+  renderQueue(state.queueItems);          // optimistic: the drawer feels instant
+  try {
+    await api("/api/queue/remove", { ip: coordinator(), index });
+    refreshQueue(true);
+  } catch (e) {
+    state.queueItems = previous;          // put it back if the speaker refused
+    renderQueue(state.queueItems);
+    toast(e.message, true);
+  }
+}
+
+async function moveInQueue(from, to) {
+  if (!coordinator()) return;
+  const previous = state.queueItems;
+  const reordered = [...previous];
+  reordered.splice(to, 0, reordered.splice(from, 1)[0]);
+  state.queueItems = reordered;
+  renderQueue(state.queueItems);
+  try {
+    await api("/api/queue/move", { ip: coordinator(), fromIndex: from, toIndex: to });
+    refreshQueue(true);
+  } catch (e) {
+    state.queueItems = previous;
+    renderQueue(state.queueItems);
+    toast(e.message, true);
+  }
+}
+
+async function clearQueue() {
+  if (!coordinator()) return;
+  try {
+    await api("/api/queue/clear", { ip: coordinator() });
+    state.queueItems = [];
+    renderQueue(state.queueItems);
+    toast("Queue cleared");
+    pollState(true);
+  } catch (e) { toast(e.message, true); }
+}
+
 function renderQueue(items) {
   const list = $("queue-list");
   if (!items.length) {
@@ -521,12 +564,16 @@ function renderQueue(items) {
     el.className = "queue-item" +
       (i + 1 === pos ? " playing" : "") +
       (pos && i + 1 < pos ? " played" : "");
+    el.draggable = true;
+    el.dataset.index = String(i);
     el.innerHTML = `
+      <span class="queue-grip">${DRAG_SVG}</span>
       <span class="queue-idx mono">${i + 1}</span>
       <div class="queue-meta">
         <div class="queue-title">${esc(item.title)}</div>
         <div class="queue-artist">${esc(item.artist)}</div>
       </div>
+      <button class="queue-remove" title="Remove from queue">${TRASH_SVG}</button>
     `;
     el.addEventListener("click", async () => {
       try {
@@ -534,6 +581,37 @@ function renderQueue(items) {
         pollState(true);
       } catch (e) { toast(e.message, true); }
     });
+    el.querySelector(".queue-remove").addEventListener("click", async (e) => {
+      e.stopPropagation();          // the row itself jumps to the track
+      await removeFromQueue(i);
+    });
+
+    // Drag to reorder. Indices are the ones the speaker uses, so the list is
+    // reordered locally for immediate feedback and then re-read from the
+    // speaker, which stays the source of truth.
+    el.addEventListener("dragstart", (e) => {
+      e.dataTransfer.effectAllowed = "move";
+      e.dataTransfer.setData("text/plain", String(i));
+      el.classList.add("dragging");
+    });
+    el.addEventListener("dragend", () => {
+      el.classList.remove("dragging");
+      list.querySelectorAll(".drop-target").forEach((n) => n.classList.remove("drop-target"));
+    });
+    el.addEventListener("dragover", (e) => {
+      e.preventDefault();
+      e.dataTransfer.dropEffect = "move";
+      el.classList.add("drop-target");
+    });
+    el.addEventListener("dragleave", () => el.classList.remove("drop-target"));
+    el.addEventListener("drop", async (e) => {
+      e.preventDefault();
+      el.classList.remove("drop-target");
+      const from = parseInt(e.dataTransfer.getData("text/plain"), 10);
+      if (Number.isNaN(from) || from === i) return;
+      await moveInQueue(from, i);
+    });
+
     list.appendChild(el);
   });
   // Keep the current track in view as the album advances.
@@ -639,6 +717,7 @@ function wireControls() {
       refreshQueue();                  // then refresh from speaker in background
     }
   });
+  $("queue-clear").addEventListener("click", clearQueue);
   $("queue-close").addEventListener("click", () => {
     state.queueOpen = false;
     drawer.classList.remove("open");
