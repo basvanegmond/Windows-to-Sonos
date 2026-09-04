@@ -36,17 +36,14 @@ $action = New-ScheduledTaskAction -Execute $Pythonw -Argument "app.py" -WorkingD
 # nothing while the server is alive (MultipleInstances = IgnoreNew) and brings
 # it straight back when it is not.
 $atLogon = New-ScheduledTaskTrigger -AtLogOn
-try {
-    # [TimeSpan]::MaxValue is how you say "repeat indefinitely"; a few older
-    # PowerShell builds reject it, so fall back to a 10-year duration.
-    $keepAlive = New-ScheduledTaskTrigger -Once -At (Get-Date).AddMinutes(1) `
-        -RepetitionInterval (New-TimeSpan -Minutes 5) `
-        -RepetitionDuration ([TimeSpan]::MaxValue)
-} catch {
-    $keepAlive = New-ScheduledTaskTrigger -Once -At (Get-Date).AddMinutes(1) `
-        -RepetitionInterval (New-TimeSpan -Minutes 5) `
-        -RepetitionDuration (New-TimeSpan -Days 3650)
-}
+# No -RepetitionDuration: an absent <Duration> in the task XML means "repeat
+# indefinitely". Do NOT pass [TimeSpan]::MaxValue here - Task Scheduler's XML
+# validator rejects it at *registration* time, not when the trigger is built,
+# so the failure surfaces as "The task XML contains a value which is
+# incorrectly formatted or out of range. (11,42):Duration:P99999999DT23H59M59S"
+# and no task is created.
+$keepAlive = New-ScheduledTaskTrigger -Once -At (Get-Date).AddMinutes(1) `
+    -RepetitionInterval (New-TimeSpan -Minutes 5)
 
 $settings = New-ScheduledTaskSettingsSet `
     -MultipleInstances IgnoreNew `
@@ -64,6 +61,9 @@ Register-ScheduledTask -TaskName $TaskName `
 
 Start-ScheduledTask -TaskName $TaskName
 
+$registered = Get-ScheduledTask -TaskName $TaskName
 Write-Host "Registered '$TaskName' and started it now."
+Write-Host "  action:     $($registered.Actions[0].Execute) $($registered.Actions[0].Arguments)"
+Write-Host "  keep-alive: every $($registered.Triggers[1].Repetition.Interval)"
 Write-Host "Check it is up:  Invoke-RestMethod http://127.0.0.1:8756/api/health"
 Write-Host "Task state:      Get-ScheduledTask -TaskName '$TaskName' | Get-ScheduledTaskInfo"
