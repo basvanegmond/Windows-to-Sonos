@@ -4,15 +4,20 @@
 # update reboot). Run this once, from a normal PowerShell window (elevation
 # is not required for a per-user logon task):
 #
-#   cd "C:\Users\basva\OneDrive\Desktop\Tools\Windows-to-Sonos"
+#   cd <the folder holding app.py>
 #   .\setup_autostart.ps1
 #
 # Re-running it is safe; it replaces the existing task definition.
 # To remove it later: Unregister-ScheduledTask -TaskName "Windows-to-Sonos"
 
+# A task registered from an elevated session can only be replaced from one.
+# If you cannot elevate, register under a different name instead and leave the
+# old task be; it points at a directory that no longer exists, so it fails
+# harmlessly:  .\setup_autostart.ps1 -TaskName "Windows-to-Sonos-KeepAlive"
+param([string]$TaskName = "Windows-to-Sonos")
+
 $ErrorActionPreference = "Stop"
 $ProjectDir = Split-Path -Parent $MyInvocation.MyCommand.Path
-$TaskName = "Windows-to-Sonos"
 
 # Run the interpreter directly, NOT via run_server.bat/run_server.vbs. Those
 # detach the process and return immediately, so Task Scheduler considered the
