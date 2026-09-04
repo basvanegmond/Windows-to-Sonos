@@ -304,25 +304,51 @@ class SonosController:
         dev = self.coordinator_of(ip)
         dev.play_uri(uri=url, title=title, force_radio=True)
 
-    def queue(self, ip: str) -> list[dict]:
+    def _queue_raw(self, dev, limit: int = 500) -> list:
+        """Fetch the speaker's queue, tolerating individual items SoCo cannot
+        parse. One unparseable item used to take the whole queue with it: the
+        bulk get_queue() raised, the caller swallowed it, and the UI showed an
+        empty queue even though the album tracks in it were fine. Falling back
+        to one request per item keeps the good ones, and keeps their positions,
+        which /api/queue/jump indexes into."""
         import logging as _log
+        try:
+            return list(dev.get_queue(max_items=limit))
+        except Exception as exc:
+            _log.warning("bulk get_queue failed (%s); retrying item by item", exc)
+
+        items: list = []
+        for i in range(limit):
+            try:
+                chunk = list(dev.get_queue(start=i, max_items=1))
+            except Exception as exc:
+                _log.warning("queue item %d is unparseable, keeping its slot: %s", i, exc)
+                items.append(None)   # placeholder: positions must stay aligned
+                continue
+            if not chunk:
+                break
+            items.append(chunk[0])
+        return items
+
+    def queue(self, ip: str) -> list[dict]:
         dev = self.coordinator_of(ip)
         items = []
-        try:
-            for item in dev.get_queue(max_items=500):
-                uri = ""
-                if item.resources:
-                    uri = item.resources[0].uri or ""
-                track_id = None
-                marker = f":{self.server_port}/stream/"
-                if marker in uri:
-                    track_id = uri.split(marker, 1)[1].split(".")[0]
-                items.append({
-                    "title": getattr(item, "title", ""),
-                    "artist": getattr(item, "creator", ""),
-                    "album": getattr(item, "album", ""),
-                    "trackId": track_id,
-                })
-        except Exception as exc:
-            _log.warning("get_queue failed for %s: %s", ip, exc)
+        marker = f":{self.server_port}/stream/"
+        for item in self._queue_raw(dev):
+            if item is None:
+                items.append({"title": "Unreadable item", "artist": "",
+                              "album": "", "trackId": None})
+                continue
+            uri = ""
+            if item.resources:
+                uri = item.resources[0].uri or ""
+            track_id = None
+            if marker in uri:
+                track_id = uri.split(marker, 1)[1].split(".")[0]
+            items.append({
+                "title": getattr(item, "title", ""),
+                "artist": getattr(item, "creator", ""),
+                "album": getattr(item, "album", ""),
+                "trackId": track_id,
+            })
         return items
