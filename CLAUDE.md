@@ -104,6 +104,13 @@
 - `GET /api/health` is the liveness probe: no Sonos calls, so it answers with
   every speaker off. Use it to check whether the server or the speakers are
   the problem.
+- **Compilations need `_merge_compilations()`.** Albums are keyed on
+  `album_artist + album`, and an untagged track falls back to its own artist,
+  so a compilation folder (one album name, a different artist per track) used
+  to render as one album tile per track. The pass only rewrites a folder's
+  album artist to "Various Artists" when every track's album artist equals its
+  own artist - a properly tagged album, guest features and multi-disc albums
+  in sibling folders are left untouched.
 - The `.claude/hooks/pre-commit.sh` hook is scaffold boilerplate for TS
   projects; it now exits early when no `package.json`/`tsconfig.json` exists.
   This is a Python project — don't re-enable TS checks.
