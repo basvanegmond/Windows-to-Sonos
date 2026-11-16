@@ -36,13 +36,34 @@ async function api(path, body, method) {
   const opts = body
     ? { method: method || "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) }
     : (method ? { method } : undefined);
-  const res = await fetch(path, opts);
+  let res;
+  try {
+    res = await fetch(path, opts);
+  } catch {
+    // fetch() rejects only when no response arrived at all: the server is
+    // down, the laptop is asleep, or this device lost the network. The raw
+    // browser text for that is "Failed to fetch", which says none of it.
+    setServerReachable(false);
+    throw new Error("Can't reach the server on the laptop (asleep, restarting, or off the network)");
+  }
+  setServerReachable(true);
   if (!res.ok) {
     let msg = `HTTP ${res.status}`;
     try { msg = (await res.json()).detail || msg; } catch { /* keep */ }
     throw new Error(msg);
   }
   return res.json();
+}
+
+let _serverReachable = true;
+function setServerReachable(ok) {
+  if (ok === _serverReachable) return;
+  _serverReachable = ok;
+  const el = $("server-info");
+  if (!el) return;
+  if (!ok) { el.dataset.was = el.textContent; el.textContent = "server unreachable"; }
+  else if (el.dataset.was) el.textContent = el.dataset.was;
+  el.classList.toggle("offline", !ok);
 }
 
 function toast(msg, isError = false) {
@@ -127,8 +148,11 @@ function renderSpeakers() {
         <span class="vol-val mono">${sp.volume ?? 0}</span>
       </div>` : `<div class="vol-row"><span class="vol-val mono" style="width:auto">offline</span></div>`}
     `;
-    if (sp.reachable) {
+    if (sp.reachable || state.selected.includes(sp.ip)) {
+      // Selected-but-offline stays clickable, or it could never be deselected.
       el.querySelector(".speaker-row").addEventListener("click", () => toggleSpeaker(sp.ip));
+    }
+    if (sp.reachable) {
       const slider = el.querySelector(".vol-slider");
       slider.addEventListener("input", () => {
         el.querySelector(".vol-val").textContent = slider.value;
@@ -157,22 +181,111 @@ function renderSpeakers() {
   }
 }
 
+/* Speaker selection is kept in step with what Sonos actually has grouped.
+   - Changes go to the server one at a time; clicks made while one is in
+     flight are folded into the next request, so two quick toggles can no
+     longer race each other into an undefined grouping.
+   - The server answers with the group it read back from the speakers, and
+     that, not the request, becomes the selection.
+   - Between changes, the periodic speaker poll adopts the real group, so a
+     change made in the Sonos app (or a join that silently failed) shows up
+     here instead of leaving the UI claiming something else. */
+const grouping = {
+  misses: new Map(),    // ip -> consecutive polls the speaker did not answer
+  inFlight: null,       // promise of the running sync, if any
+  dirty: false,         // selection changed since the last request was built
+  release: new Set(),   // speakers deselected and not yet told to stop
+  epoch: 0,             // bumped on every local change
+  holdUntil: 0,         // ignore polled topology until Sonos has settled
+};
+
+function persistSelection() {
+  try { localStorage.setItem("selectedSpeakers", JSON.stringify(state.selected)); } catch { /* private mode */ }
+}
+
+function renderSelection() {
+  renderSpeakers();
+  if (!$("vol-backdrop").hidden) renderVolumeOverlay();
+}
+
 async function toggleSpeaker(ip) {
   const idx = state.selected.indexOf(ip);
-  if (idx >= 0) state.selected.splice(idx, 1);
-  else state.selected.push(ip);
-  renderSpeakers();
-  if (state.selected.length) {
-    try {
-      const res = await api("/api/speakers/group", { ips: state.selected });
-      // Keep coordinator first.
-      state.selected = [res.coordinatorIp,
-        ...state.selected.filter((i) => i !== res.coordinatorIp)];
-    } catch (e) { toast(e.message, true); }
+  if (idx >= 0) { state.selected.splice(idx, 1); grouping.release.add(ip); }
+  else { state.selected.push(ip); grouping.release.delete(ip); }
+  grouping.epoch++;
+  renderSelection();
+  await syncGroup();
+}
+
+function syncGroup() {
+  grouping.dirty = true;
+  if (!grouping.inFlight) {
+    grouping.inFlight = runGroupSync().finally(() => { grouping.inFlight = null; });
   }
-  localStorage.setItem("selectedSpeakers", JSON.stringify(state.selected));
-  renderSpeakers();
+  return grouping.inFlight;
+}
+
+async function runGroupSync() {
+  while (grouping.dirty) {
+    grouping.dirty = false;
+    const want = [...state.selected];
+    const release = [...grouping.release].filter((ip) => !want.includes(ip));
+    try {
+      const res = await api("/api/speakers/group", { ips: want, release });
+      release.forEach((ip) => grouping.release.delete(ip));
+      if (grouping.dirty) continue;        // clicked again meanwhile: next pass decides
+      if (want.length) state.selected = res.members;
+      if (res.failed.length) {
+        toast(res.failed.map((f) => `${f.name} ${f.error}`).join("; "), true);
+      }
+    } catch (e) {
+      toast(e.message, true);
+      if (!grouping.dirty) {
+        await loadSpeakers();              // re-read the speakers, then show
+        adoptActualGroup();                // whatever Sonos really has grouped
+      }
+    }
+  }
+  grouping.holdUntil = Date.now() + 3000;
+  persistSelection();
+  renderSelection();
   pollState(true);
+}
+
+const OFFLINE_AFTER_MISSES = 4;   // speaker polls run every 15 s
+
+/* Make the selection equal the group Sonos reports for the lead speaker. */
+function adoptActualGroup() {
+  const byIp = new Map(state.speakers.map((sp) => [sp.ip, sp]));
+  // A lead speaker that has been silent for a minute is switched off: hand
+  // the lead to the next selected speaker rather than aim every command at it.
+  while (state.selected.length &&
+         (grouping.misses.get(state.selected[0]) || 0) >= OFFLINE_AFTER_MISSES) {
+    state.selected.shift();
+    persistSelection();
+  }
+  const lead = coordinator();
+  if (!lead) return;
+  const leadSp = byIp.get(lead);
+  if (!leadSp || !leadSp.reachable) return;   // can't see the truth now: keep what we have
+  const actual = leadSp.coordinatorIp;
+  const head = byIp.has(actual) ? actual : lead;
+  const members = state.speakers
+    .filter((sp) => sp.ip !== head &&
+      // An unreachable speaker's grouping is unknown, not "left the group":
+      // one missed poll must not silently deselect it while it keeps playing.
+      // After a minute of silence it is treated as switched off.
+      (sp.reachable ? sp.coordinatorIp === actual
+        : state.selected.includes(sp.ip) && (grouping.misses.get(sp.ip) || 0) < OFFLINE_AFTER_MISSES))
+    .map((sp) => sp.ip);
+  const next = [head, ...members];
+  const same = next.length === state.selected.length &&
+    next.every((ip) => state.selected.includes(ip)) && next[0] === state.selected[0];
+  if (!same) {
+    state.selected = next;
+    grouping.release.clear();
+    persistSelection();
+  }
 }
 
 /* ---------- rendering: library ---------- */
@@ -928,15 +1041,17 @@ function renderVolumeOverlay() {
       </div>` : ""}
     `;
 
-    if (sp.reachable) {
-      const valEl = card.querySelector(`#${safeId}`);
-      const slider = card.querySelector(".vol-big-slider");
-
+    if (sp.reachable || isSelected) {
       // clicking the card head (checkbox area / name) toggles speaker selection
       card.querySelector(".vol-sp-card-head").addEventListener("click", async () => {
         await toggleSpeaker(sp.ip);
         renderVolumeOverlay();
       });
+    }
+
+    if (sp.reachable) {
+      const valEl = card.querySelector(`#${safeId}`);
+      const slider = card.querySelector(".vol-big-slider");
 
       const applyVol = async (v) => {
         v = Math.max(0, Math.min(100, v));
@@ -1509,23 +1624,41 @@ async function loadLibrary() {
   }
 }
 
+let _speakersLoaded = false;
+
 async function loadSpeakers() {
+  const epoch = grouping.epoch;
   try {
     const res = await api("/api/speakers");
     state.speakers = res.speakers;
     $("server-info").textContent = `serving ${res.serverIp}`;
-    // Restore saved selection on first load (state.selected is empty only at boot time).
-    if (!state.selected.length) {
-      const saved = JSON.parse(localStorage.getItem("selectedSpeakers") || "[]");
-      state.selected = saved.filter(ip => state.speakers.find(s => s.ip === ip && s.reachable));
+    $("server-info").dataset.was = "";
+    const configured = (ip) => state.speakers.some((sp) => sp.ip === ip);
+    for (const sp of state.speakers) {
+      grouping.misses.set(sp.ip, sp.reachable ? 0 : (grouping.misses.get(sp.ip) || 0) + 1);
     }
-    // Drop any selected IPs that are now unreachable
-    state.selected = state.selected.filter(ip => {
-      const sp = state.speakers.find(s => s.ip === ip);
-      return sp && sp.reachable;
-    });
-    renderSpeakers();
-    if (!$("vol-backdrop").hidden) renderVolumeOverlay();
+    if (!_speakersLoaded) {
+      _speakersLoaded = true;
+      // First load: restore the saved selection, else pick the first
+      // reachable speaker so play works immediately.
+      let saved = [];
+      try { saved = JSON.parse(localStorage.getItem("selectedSpeakers") || "[]"); } catch { /* corrupt */ }
+      state.selected = saved.filter(configured);
+      if (!state.selected.length) {
+        const first = state.speakers.find((sp) => sp.reachable);
+        if (first) state.selected = [first.ip];
+      }
+    }
+    // Speakers removed from config.json cannot stay selected. Unreachable
+    // ones can: a single missed poll used to drop a speaker from the
+    // selection for good while it carried on playing in the group.
+    state.selected = state.selected.filter(configured);
+    // Adopt the real grouping unless a change of ours is in flight or has
+    // only just been made (this response may predate it).
+    if (!grouping.inFlight && epoch === grouping.epoch && Date.now() >= grouping.holdUntil) {
+      adoptActualGroup();
+    }
+    renderSelection();
   } catch (e) {
     toast("Could not load speakers: " + e.message, true);
   }
@@ -1534,15 +1667,9 @@ async function loadSpeakers() {
 async function boot() {
   wireControls();
   await Promise.allSettled([loadLibrary(), loadSpeakers(), loadYtDurations()]);
-  // Auto-select the first reachable speaker so play works immediately.
-  const first = state.speakers.find((s) => s.reachable);
-  if (first && !state.selected.length) {
-    state.selected = [first.ip];
-    renderSpeakers();
-  }
   pollState(true);
-  let _pollTimer = setInterval(pollState, 1000);
-  let _speakerTimer = setInterval(loadSpeakers, 15000);
+  setInterval(pollState, 1000);
+  setInterval(loadSpeakers, 15000);
 }
 
 boot();

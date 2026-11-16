@@ -1,15 +1,29 @@
 """Sonos control via SoCo: speaker registry, grouping, queueing local tracks
 with DIDL metadata (so speakers display title/artist/art), and transport."""
 
+import logging
 import socket
+import threading
+import time
 from concurrent.futures import ThreadPoolExecutor
-from urllib.parse import quote
 
 import soco
+import soco.config
 from soco.data_structures import DidlMusicTrack, DidlResource
 
 from library import Track
 from transcoder import needs_transcode
+
+# (connect, read) seconds for every UPnP request. SoCo's default is 20 s, and
+# it has no per-device setting: the old `dev.timeout = 2` only created an
+# unused attribute, so one switched-off speaker stalled /api/speakers, the
+# state poll and the page's first load for 20 s per call. A LAN speaker
+# answers in well under a second; 2 s to connect is already generous.
+soco.config.REQUEST_TIMEOUT = (2.0, 8.0)
+
+# How long to wait for Sonos to report a grouping change before giving up.
+_SETTLE_SECONDS = 3.0
+_SETTLE_STEP = 0.25
 
 
 def _probe_duration(path: str) -> float:
@@ -61,13 +75,33 @@ class SonosController:
         self.configured = speakers  # [{name, ip}]
         self.server_port = server_port
         self._devices: dict[str, soco.SoCo] = {}
-        self.server_ip = _detect_server_ip(speakers) if speakers else "127.0.0.1"
+        self._server_ip = "127.0.0.1"
+        self._server_ip_checked = 0.0
+        self._group_lock = threading.Lock()   # one grouping change at a time
+        self._topology_via: str | None = None  # last speaker that answered
+        self._state_pool = ThreadPoolExecutor(max_workers=4, thread_name_prefix="sonos-state")
+
+    @property
+    def server_ip(self) -> str:
+        """The LAN address the speakers should pull audio from, re-detected as
+        the network changes.
+
+        This used to be read once at startup. The server now starts at logon,
+        often before Wi-Fi is up, so it could latch onto 127.0.0.1 and hand
+        every speaker a stream URL pointing at itself until someone restarted
+        it; a new DHCP lease had the same effect. Detection is a routing-table
+        lookup (a UDP connect sends no packet), so asking again is free.
+        """
+        now = time.monotonic()
+        if now - self._server_ip_checked > 5.0:
+            self._server_ip_checked = now
+            if self.configured:
+                self._server_ip = _detect_server_ip(self.configured)
+        return self._server_ip
 
     def device(self, ip: str) -> soco.SoCo:
         if ip not in self._devices:
-            dev = soco.SoCo(ip)
-            dev.timeout = 2  # cap per-request wait; LAN speakers respond in <1s
-            self._devices[ip] = dev
+            self._devices[ip] = soco.SoCo(ip)
         return self._devices[ip]
 
     # ---------- URLs & metadata ----------
@@ -161,43 +195,208 @@ class SonosController:
         with ThreadPoolExecutor(max_workers=max(1, len(self.configured))) as ex:
             return list(ex.map(_fetch_one, self.configured))
 
-    def form_group(self, ips: list[str]) -> soco.SoCo:
-        """Make the first IP the coordinator; join the rest; unjoin configured
-        speakers that are grouped with the coordinator but not selected."""
-        if not ips:
-            raise ValueError("No speakers selected")
-        coordinator = self.device(ips[0])
-        if coordinator.group and coordinator.group.coordinator.ip_address != ips[0]:
-            coordinator.unjoin()
-        selected = set(ips)
-        for cfg in self.configured:
-            ip = cfg["ip"]
-            if ip == ips[0]:
-                continue
+    def _topology(self, prefer: str | None = None) -> dict[str, str]:
+        """Ask Sonos, right now, who leads whom: {player ip: coordinator ip}.
+
+        SoCo caches the zone topology for 5 seconds, and refills that cache
+        straight after a join/unjoin, when the speakers have often not caught
+        up yet. Grouping decisions made from it were therefore wrong for the
+        next few seconds: a quick deselect-then-reselect saw the speaker as
+        still grouped and skipped the join (shown selected, silent), and the
+        reverse left a deselected speaker playing. Every grouping decision
+        here reads the topology fresh instead.
+        """
+        order = [prefer, self._topology_via] + [c["ip"] for c in self.configured]
+        last_exc: Exception | None = None
+        for ip in dict.fromkeys(i for i in order if i):
             try:
                 dev = self.device(ip)
-                in_group = (dev.group and
-                            dev.group.coordinator.ip_address == coordinator.ip_address)
-                if ip in selected and not in_group:
-                    dev.join(coordinator)
-                elif ip not in selected and in_group:
-                    dev.unjoin()
-                    try:
-                        dev.stop()
-                    except Exception:
-                        pass
-            except Exception:
-                pass
-        return coordinator
+                dev.zone_group_state.clear_cache()
+                topo = {}
+                for group in dev.all_groups:
+                    if group.coordinator is None:
+                        continue
+                    for member in group.members:
+                        topo[member.ip_address] = group.coordinator.ip_address
+                if topo:
+                    self._topology_via = ip
+                    return topo
+            except Exception as exc:
+                last_exc = exc
+        raise RuntimeError(f"No speaker answered a topology request ({last_exc})")
+
+    def _settle(self, done, prefer: str) -> dict[str, str]:
+        """Poll the topology until done(topo) holds or the wait runs out, and
+        return the last topology read. Sonos applies a grouping change a moment
+        after acknowledging it."""
+        deadline = time.monotonic() + _SETTLE_SECONDS
+        topo = self._topology(prefer)
+        while not done(topo) and time.monotonic() < deadline:
+            time.sleep(_SETTLE_STEP)
+            topo = self._topology(prefer)
+        return topo
+
+    def _group_matches(self, topo: dict[str, str], lead: str, selected: set[str]) -> bool:
+        return all((topo.get(c["ip"]) == lead) == (c["ip"] in selected)
+                   for c in self.configured)
+
+    @staticmethod
+    def _quiet_stop(dev: soco.SoCo) -> None:
+        try:
+            dev.stop()
+        except Exception:
+            pass  # nothing playing, or a source (TV, line-in) that cannot stop
+
+    def _take_over(self, leader: str, new_lead: str) -> None:
+        """Make new_lead the coordinator of the group currently led by leader,
+        which is no longer wanted in it.
+
+        Deselecting the coordinator used to be the worst case: the remaining
+        speaker was unjoined (which leaves it with an empty queue, silent) and
+        the old coordinator was not touched at all, so it carried on playing.
+        One click produced "deselected but still playing" and "selected but
+        silent" at once. Handing coordination over keeps the queue and the
+        music on the speakers that are still selected, and drops the old
+        coordinator out of the group.
+        """
+        old, new = self.device(leader), self.device(new_lead)
+        try:
+            old.avTransport.DelegateGroupCoordinationTo([
+                ("InstanceID", 0),
+                ("NewCoordinator", new.uid),
+                ("RejoinGroup", 0),
+            ])
+            topo = self._settle(lambda t: t.get(new_lead) == new_lead, new_lead)
+            if topo.get(new_lead) == new_lead:
+                return
+            logging.warning("handing coordination from %s to %s did not take effect",
+                            leader, new_lead)
+        except Exception as exc:
+            # e.g. the group is playing TV or line-in audio, which only the
+            # speaker with that input can lead.
+            logging.warning("could not hand coordination from %s to %s: %s",
+                            leader, new_lead, exc)
+        # Fallback: split off. The queue stays behind, but the result is at
+        # least consistent with the selection.
+        new.unjoin()
+        if any(c["ip"] == leader for c in self.configured):
+            self._quiet_stop(old)
+        self._settle(lambda t: t.get(new_lead) == new_lead, new_lead)
+
+    def form_group(self, ips: list[str], release: list[str] | None = None) -> dict:
+        """Make Sonos match the selection, then report what Sonos actually did.
+
+        `ips` are the speakers that should play together; `release` are
+        speakers that were just deselected and should fall silent. Returns
+        {coordinatorIp, members, failed}: members is read back from the
+        speakers after the change, so the UI shows the real group rather than
+        the one that was asked for.
+        """
+        selected = list(dict.fromkeys(ips))
+        with self._group_lock:   # overlapping requests would interleave joins
+            return self._form_group(selected, [ip for ip in (release or [])
+                                               if ip not in selected])
+
+    def _form_group(self, selected: list[str], release: list[str]) -> dict:
+        errors: dict[str, str] = {}
+        if not selected:
+            self._release(release, None, errors)
+            return {"coordinatorIp": None, "members": [],
+                    "failed": self._failures(errors)}
+
+        lead = selected[0]
+        wanted = set(selected)
+        topo = self._topology(lead)
+        leader = topo.get(lead, lead)
+        if leader != lead:
+            if leader in wanted:
+                # Already grouped under another selected speaker: keep that
+                # coordinator. Rebuilding the group around `lead` would stop
+                # whatever is playing.
+                lead = leader
+            else:
+                self._take_over(leader, lead)
+
+        coordinator = self.device(lead)
+        for _ in range(2):   # second pass retries anything Sonos dropped
+            topo = self._topology(lead)
+            changed = 0
+            for cfg in self.configured:
+                ip = cfg["ip"]
+                if ip == lead:
+                    continue
+                in_group = topo.get(ip) == lead
+                try:
+                    if ip in wanted and not in_group:
+                        self.device(ip).join(coordinator)
+                        changed += 1
+                    elif ip not in wanted and in_group:
+                        dev = self.device(ip)
+                        dev.unjoin()
+                        self._quiet_stop(dev)
+                        changed += 1
+                    else:
+                        errors.pop(ip, None)
+                except Exception as exc:
+                    errors[ip] = str(exc)
+            if not changed:
+                break
+            topo = self._settle(lambda t: self._group_matches(t, lead, wanted), lead)
+            if self._group_matches(topo, lead, wanted):
+                errors.clear()
+                break
+
+        self._release(release, lead, errors)
+        topo = self._topology(lead)
+        members = [lead] + [c["ip"] for c in self.configured
+                            if c["ip"] != lead and topo.get(c["ip"]) == lead]
+        for ip in selected:
+            if ip not in members:
+                errors.setdefault(ip, "did not join the group")
+        for ip in members:
+            if ip not in wanted:
+                errors.setdefault(ip, "is still in the group")
+        return {"coordinatorIp": lead, "members": members,
+                "failed": self._failures(errors)}
+
+    def _release(self, release: list[str], lead: str | None,
+                 errors: dict[str, str]) -> None:
+        """Silence speakers that were deselected and are not part of the
+        current group. Deselecting the last speaker used to send nothing at
+        all, so it went on playing with nothing selected in the UI."""
+        if not release:
+            return
+        try:
+            topo = self._topology(lead)
+        except Exception as exc:
+            for ip in release:
+                errors[ip] = str(exc)
+            return
+        for ip in release:
+            try:
+                dev = self.device(ip)
+                leader = topo.get(ip, ip)
+                if lead is not None and leader == lead:
+                    continue           # still grouped: reported by the caller
+                if leader != ip:
+                    dev.unjoin()       # follower of some other group
+                self._quiet_stop(dev)
+            except Exception as exc:
+                errors[ip] = str(exc)
+
+    def _failures(self, errors: dict[str, str]) -> list[dict]:
+        names = {c["ip"]: c["name"] for c in self.configured}
+        return [{"ip": ip, "name": names.get(ip, ip), "error": err}
+                for ip, err in errors.items()]
 
     def coordinator_of(self, ip: str) -> soco.SoCo:
         dev = self.device(ip)
         try:
             group = dev.group
-            if group:
+            if group and group.coordinator is not None:
                 return self.device(group.coordinator.ip_address)
         except Exception:
-            self._devices.pop(ip, None)  # evict; will be recreated fresh next call
+            pass  # topology unavailable: address the speaker itself
         return dev
 
     # ---------- queue & playback ----------
@@ -325,11 +524,14 @@ class SonosController:
         }
 
     def state_with_timeout(self, ip: str, timeout: float = 4.0) -> dict:
-        """Run state() in a separate thread so a hung speaker can't hold
-        the server's thread pool indefinitely. Raises TimeoutError on overrun."""
-        with ThreadPoolExecutor(max_workers=1) as ex:
-            fut = ex.submit(self.state, ip)
-            return fut.result(timeout=timeout)
+        """Run state() on a shared pool so a slow speaker cannot hold a request
+        thread past `timeout`. Raises TimeoutError on overrun.
+
+        This used to create an executor in a `with` block, whose exit waits
+        for the submitted call to finish: the timeout fired and then the
+        request blocked anyway, for as long as the speaker took.
+        """
+        return self._state_pool.submit(self.state, ip).result(timeout=timeout)
 
     def play_radio(self, ip: str, url: str, title: str) -> None:
         """Play an internet radio stream URI directly (bypasses the track queue)."""

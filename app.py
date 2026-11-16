@@ -35,14 +35,25 @@ try:
 except Exception as _startup_exc:
     import logging as _log, traceback as _tb
     (BASE_DIR / "logs").mkdir(exist_ok=True)
-    (BASE_DIR / "logs" / "server.log").write_text(
-        f"STARTUP FAILED:\n{_tb.format_exc()}", encoding="utf-8"
-    )
+    with (BASE_DIR / "logs" / "server.log").open("a", encoding="utf-8") as _f:
+        _f.write(f"\nSTARTUP FAILED:\n{_tb.format_exc()}")
     raise
 
 
+def _yt_track(track_id: str) -> Track | None:
+    """A cached YouTube track by id ("yt<video_id>"). Falls back to the cache
+    on disk, so an item that is listed (the list is read from disk) can always
+    be played even if this process never registered it in memory."""
+    track = yt_tracks.get(track_id)
+    if track is None and track_id.startswith("yt"):
+        item = youtube.get_item(track_id[2:])
+        if item is not None:
+            track = yt_tracks[track_id] = item.to_track()
+    return track
+
+
 def resolve_track(track_id: str) -> Track | None:
-    return library.tracks.get(track_id) or yt_tracks.get(track_id)
+    return library.tracks.get(track_id) or _yt_track(track_id)
 
 app = FastAPI(title="Windows to Sonos")
 _STARTED_AT = time.monotonic()
@@ -91,7 +102,8 @@ class PlayModeRequest(BaseModel):
 
 
 class GroupRequest(BaseModel):
-    ips: list[str]
+    ips: list[str]              # speakers that should play together, may be empty
+    release: list[str] = []     # speakers just deselected: make them fall silent
 
 
 class YouTubeRequest(BaseModel):
@@ -151,7 +163,7 @@ def _tracks_with_album(track_ids: list[str]):
         track = library.tracks.get(tid)
         if track:
             out.append((track, album_of.get(tid, "")))
-        elif tid in yt_tracks:
+        elif _yt_track(tid):
             out.append((yt_tracks[tid], f"yt-{tid[2:]}"))
     if not out:
         raise HTTPException(404, "No matching tracks")
@@ -162,7 +174,22 @@ def _sonos_call(fn, *args, **kwargs):
     try:
         return fn(*args, **kwargs)
     except Exception as exc:
+        # These used to reach the browser as a toast and nowhere else, so a
+        # failure seen on the wall display left no trace to diagnose later.
+        logging.warning("%s%r failed: %s", getattr(fn, "__name__", fn), args[:1], exc)
         raise HTTPException(502, f"Sonos error: {exc}") from exc
+
+
+def _apply_selection(ip: str, group_ips: list[str]) -> str:
+    """Make the speakers match the UI's selection before starting playback and
+    return the coordinator to address.
+
+    This was skipped whenever a single speaker was selected, so speakers still
+    grouped with it from an earlier session (or from the Sonos app) played
+    along although they were not selected.
+    """
+    result = _sonos_call(sonos.form_group, group_ips or [ip])
+    return result["coordinatorIp"] or ip
 
 
 # ---------- health ----------
@@ -284,33 +311,35 @@ def stream(track_ref: str, request: Request):
 
 # ---------- youtube ----------
 
+def _fetch_youtube(url: str):
+    try:
+        return youtube.fetch(url)
+    except youtube.BotCheckError as exc:
+        logging.warning("YouTube bot check, all clients refused: %s", url)
+        raise HTTPException(502, str(exc)) from exc
+    except Exception as exc:
+        logging.warning("yt-dlp failed for %s: %s", url, exc)
+        raise HTTPException(502, f"Could not load: {exc}") from exc
+
+
 @app.post("/api/youtube")
 def youtube_fetch(req: YouTubeRequest):
-    try:
-        item = youtube.fetch(req.url)
-    except Exception as exc:
-        logging.warning("yt-dlp failed for %s: %s", req.url, exc)
-        raise HTTPException(502, f"Could not load: {exc}") from exc
+    item = _fetch_youtube(req.url)
     yt_tracks[item.track_id] = item.to_track()
     if req.ip:
-        group_ips = req.groupIps or [req.ip]
-        if len(group_ips) > 1:
-            _sonos_call(sonos.form_group, group_ips)
         pair = [(yt_tracks[item.track_id], f"yt-{item.video_id}")]
         if req.addToQueue:
             _sonos_call(sonos.add_to_queue, req.ip, pair)
         else:
-            _sonos_call(sonos.play_tracks, req.ip, pair, 0)
+            lead = _apply_selection(req.ip, req.groupIps)
+            _sonos_call(sonos.play_tracks, lead, pair, 0)
     return {"ok": True, "item": item.to_dict()}
 
 
 @app.post("/api/youtube/fetch")
 def youtube_fetch_only(req: YouTubeFetchRequest):
     """Fetch/cache a YouTube video without playing it (for pre-adding to favourites)."""
-    try:
-        item = youtube.fetch(req.url)
-    except Exception as exc:
-        raise HTTPException(502, f"YouTube fetch failed: {exc}") from exc
+    item = _fetch_youtube(req.url)
     yt_tracks[item.track_id] = item.to_track()
     return {"ok": True, "item": item.to_dict()}
 
@@ -391,30 +420,31 @@ def speakers():
 
 @app.post("/api/speakers/group")
 def group(req: GroupRequest):
-    coordinator = _sonos_call(sonos.form_group, req.ips)
-    return {"coordinatorIp": coordinator.ip_address}
+    return _sonos_call(sonos.form_group, req.ips, req.release)
 
 
 # ---------- playback ----------
 
 @app.post("/api/play")
 def play(req: PlayRequest):
-    # Re-enforce speaker grouping before play so members that drifted (e.g.
-    # after a speaker restart) automatically rejoin the coordinator.
-    group_ips = req.groupIps or [req.ip]
-    if len(group_ips) > 1:
-        _sonos_call(sonos.form_group, group_ips)
     tracks = _tracks_with_album(req.trackIds)
+    # Ids that no longer resolve (library rescanned since the page loaded) are
+    # dropped above, which shifts positions: find the requested track by id
+    # rather than trusting the index, or a different song starts.
+    wanted = req.trackIds[req.startIndex] if 0 <= req.startIndex < len(req.trackIds) else None
+    start = next((i for i, (t, _) in enumerate(tracks) if t.id == wanted), 0)
     # Transcode the first track synchronously so playback starts reliably,
     # then warm the rest of the queue in the background.
-    first = tracks[req.startIndex][0] if req.startIndex < len(tracks) else tracks[0][0]
+    first = tracks[start][0]
     if needs_transcode(first):
         try:
             ensure_transcoded(first)
         except Exception as exc:
+            logging.warning("transcode failed for %s: %s", first.path, exc)
             raise HTTPException(500, f"Transcode failed: {exc}") from exc
     prewarm([t for t, _ in tracks])
-    _sonos_call(sonos.play_tracks, req.ip, tracks, req.startIndex, play_mode=req.playMode or "NORMAL")
+    lead = _apply_selection(req.ip, req.groupIps)
+    _sonos_call(sonos.play_tracks, lead, tracks, start, play_mode=req.playMode or "NORMAL")
     return {"ok": True}
 
 
@@ -535,10 +565,8 @@ def radio_play(station_id: str, req: RadioPlayRequest):
     station = next((s for s in stations if s["id"] == station_id), None)
     if not station:
         raise HTTPException(404, "Station not found")
-    group_ips = req.groupIps or [req.ip]
-    if len(group_ips) > 1:
-        _sonos_call(sonos.form_group, group_ips)
-    _sonos_call(sonos.play_radio, req.ip, station["url"], station["name"])
+    lead = _apply_selection(req.ip, req.groupIps)
+    _sonos_call(sonos.play_radio, lead, station["url"], station["name"])
     return {"ok": True}
 
 
