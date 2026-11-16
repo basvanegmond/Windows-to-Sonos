@@ -3,4 +3,4 @@ uvicorn>=0.30
 soco>=0.30
 mutagen>=1.47
 imageio-ffmpeg>=0.5
-yt-dlp>=2026.1
+yt-dlp[default]>=2026.1

@@ -23,6 +23,35 @@ FAVS_PATH = Path(__file__).parent / "youtube_favourites.json"
 # it's not installed here, but Node.js is — so opt it in explicitly.
 JS_RUNTIMES = {"node": {}}
 
+# YouTube sometimes answers a download with "Sign in to confirm you're not a
+# bot". That check is made against this server's request (yt-dlp on the
+# laptop); no browser and no account on the display are involved. It is
+# applied per client type, and the clients below are ones for which YouTube
+# does not demand a proof-of-origin token, so retrying through them usually
+# gets the audio without any sign-in. Tried in order, after yt-dlp's own
+# defaults; names the installed yt-dlp does not know are skipped, because the
+# set changes between releases.
+_FALLBACK_CLIENTS = (
+    ["tv", "tv_downgraded"],
+    ["web_embedded"],
+    ["visionos"],
+    ["tv_samsung"],
+    ["mweb"],
+)
+_BOT_CHECK = re.compile(r"sign in to confirm|not a bot", re.IGNORECASE)
+
+UPDATE_HINT = (
+    "YouTube asked for a sign-in check (bot detection) and refused every "
+    "client that works without an account. This is usually fixed by updating "
+    "yt-dlp on the laptop: .venv\\Scripts\\python.exe -m pip install -U "
+    '"yt-dlp[default]"  then restart the server.'
+)
+
+
+class BotCheckError(RuntimeError):
+    """YouTube demanded a sign-in for every client we could try."""
+
+
 _locks: dict[str, threading.Lock] = {}
 _locks_guard = threading.Lock()
 _favs_lock = threading.Lock()
@@ -108,6 +137,13 @@ def _load_item(video_id: str) -> YouTubeItem | None:
     return None
 
 
+def get_item(video_id: str) -> YouTubeItem | None:
+    """The cached item for a video id, or None if it is not (fully) cached."""
+    if not re.fullmatch(r"[A-Za-z0-9_-]{11}", video_id):
+        return None
+    return _load_item(video_id)
+
+
 _ID_PATTERNS = (
     re.compile(r"(?:youtube\.com/watch\?(?:[^#]*&)?v=|youtu\.be/|youtube\.com/(?:shorts|embed|live)/)([A-Za-z0-9_-]{11})"),
 )
@@ -125,6 +161,48 @@ def probe_id(url: str) -> str | None:
             return info.get("id")
     except Exception:
         return None
+
+
+def _known_clients() -> set[str] | None:
+    """Client names the installed yt-dlp supports, or None if that cannot be
+    read (an internal table, so tolerate it moving)."""
+    try:
+        from yt_dlp.extractor.youtube._base import INNERTUBE_CLIENTS
+        return set(INNERTUBE_CLIENTS)
+    except Exception:
+        return None
+
+
+def _client_attempts() -> list[list[str] | None]:
+    """Player-client sets to try in order; None means yt-dlp's defaults."""
+    known = _known_clients()
+    attempts: list[list[str] | None] = [None]
+    for clients in _FALLBACK_CLIENTS:
+        usable = [c for c in clients if known is None or c in known]
+        if usable:
+            attempts.append(usable)
+    return attempts
+
+
+def _download(url: str, opts: dict) -> dict:
+    """Run yt-dlp, retrying through other player clients if, and only if,
+    YouTube answers with its bot check. Any other failure is raised as is."""
+    import logging
+    last: Exception | None = None
+    for clients in _client_attempts():
+        attempt = dict(opts)
+        if clients:
+            attempt["extractor_args"] = {"youtube": {"player_client": clients}}
+        try:
+            with yt_dlp.YoutubeDL(attempt) as ydl:
+                return ydl.extract_info(url, download=True)
+        except Exception as exc:
+            if not _BOT_CHECK.search(str(exc)):
+                raise
+            last = exc
+            logging.warning("YouTube bot check with clients %s for %s; trying the next",
+                            clients or "default", url)
+    raise BotCheckError(UPDATE_HINT) from last
 
 
 def fetch(url: str) -> YouTubeItem:
@@ -154,8 +232,7 @@ def fetch(url: str) -> YouTubeItem:
                 {"key": "FFmpegThumbnailsConvertor", "format": "jpg"},
             ],
         }
-        with yt_dlp.YoutubeDL(opts) as ydl:
-            info = ydl.extract_info(url, download=True)
+        info = _download(url, opts)
         if info.get("entries"):  # playlist URL despite noplaylist
             info = info["entries"][0]
         resolved_id = info.get("id")
