@@ -104,6 +104,42 @@
 - `GET /api/health` is the liveness probe: no Sonos calls, so it answers with
   every speaker off. Use it to check whether the server or the speakers are
   the problem.
+- **Speaker grouping reads the topology fresh, every time.** SoCo caches the
+  zone topology for 5 s and refills it right after a join/unjoin, before the
+  speakers have caught up, so `dev.group` lies for the next few seconds. Quick
+  toggles then skipped a join (selected but silent) or an unjoin (deselected
+  but playing). `sonos_ctl._topology()` clears the cache per read and
+  `form_group` waits for Sonos to confirm, then returns the group it read
+  back. Never decide grouping from `dev.group`.
+- **Deselecting the coordinator must hand coordination over**
+  (`DelegateGroupCoordinationTo`, in `_take_over`). Unjoining the remaining
+  speaker instead leaves it with an empty queue while the old coordinator
+  keeps playing: both symptoms from one click.
+- **The UI shows the real group, not the requested one.** `/api/speakers/group`
+  answers `{coordinatorIp, members, failed}` and `app.js` sets the selection
+  from `members`; the 15 s speaker poll adopts whatever Sonos has (so Sonos-app
+  changes appear). Requests are serialised on both sides. Every play path goes
+  through `_apply_selection`, including with a single speaker selected.
+- **SoCo has no per-device timeout.** `dev.timeout = 2` only creates an unused
+  attribute; the real knob is `soco.config.REQUEST_TIMEOUT` (default 20 s),
+  set at the top of `sonos_ctl.py`. One switched-off speaker used to stall
+  `/api/speakers` and the page's first load for 20 s per call.
+- **`server_ip` is re-detected, not read once.** The server starts at logon,
+  often before Wi-Fi is up; latching the startup value gave the speakers
+  `http://127.0.0.1:8756/...` stream URLs until a restart.
+- **Install `yt-dlp[default]`, not bare `yt-dlp`.** Only the extra pulls in
+  `yt-dlp-ejs`, the JavaScript challenge solver YouTube requires. When YouTube
+  answers "Sign in to confirm you're not a bot", `youtube._download` retries
+  through clients that need no PO token or account (`_FALLBACK_CLIENTS`); the
+  check is on the server's request, no browser account is involved. If every
+  client is refused, update yt-dlp first.
+- **Compilations need `_merge_compilations()`.** Albums are keyed on
+  `album_artist + album`, and an untagged track falls back to its own artist,
+  so a compilation folder (one album name, a different artist per track) used
+  to render as one album tile per track. The pass only rewrites a folder's
+  album artist to "Various Artists" when every track's album artist equals its
+  own artist - a properly tagged album, guest features and multi-disc albums
+  in sibling folders are left untouched.
 - The `.claude/hooks/pre-commit.sh` hook is scaffold boilerplate for TS
   projects; it now exits early when no `package.json`/`tsconfig.json` exists.
   This is a Python project — don't re-enable TS checks.

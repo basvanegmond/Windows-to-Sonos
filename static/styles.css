@@ -194,6 +194,7 @@ svg { width: 18px; height: 18px; flex-shrink: 0; }
   padding: 0 10px;
   line-height: 1.7;
 }
+.server-info.offline { color: #e5484d; }
 
 /* ============ MAIN ============ */
 

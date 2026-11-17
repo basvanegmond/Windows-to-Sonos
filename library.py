@@ -31,6 +31,8 @@ MIME_BY_EXT = {
     ".aif":  "audio/aiff",
 }
 
+VARIOUS_ARTISTS = "Various Artists"
+
 COVER_NAMES = ("cover.jpg", "cover.png", "folder.jpg", "folder.png",
                "front.jpg", "album.jpg", "albumart.jpg")
 
@@ -189,6 +191,34 @@ def extract_art(track_path: str) -> tuple[bytes, str] | None:
     return None
 
 
+def _merge_compilations(tracks: dict[str, Track]) -> None:
+    """Give compilation albums a single album artist, so they stay one album.
+
+    Albums are keyed on album_artist + album, and a track with no albumartist
+    tag falls back to its own artist. A compilation - one folder, one album
+    name, a different artist on every track - therefore split into one album
+    per track, each showing the same title and cover.
+
+    Only folders that look like compilations are touched: every track must
+    carry the album name of the group, and no track may have an album artist
+    that differs from its own artist. A properly tagged album, including one
+    whose discs sit in sibling folders, has a consistent albumartist and is
+    left exactly as it was.
+    """
+    groups: dict[tuple[str, str], list[Track]] = {}
+    for t in tracks.values():
+        key = (os.path.dirname(t.path).lower(), t.album.lower())
+        groups.setdefault(key, []).append(t)
+
+    for group in groups.values():
+        if len({t.album_artist for t in group}) <= 1:
+            continue                                      # already one album
+        if any(t.album_artist != t.artist for t in group):
+            continue                                      # real album artists: leave alone
+        for t in group:
+            t.album_artist = VARIOUS_ARTISTS
+
+
 class Library:
     def __init__(self, folders: list[str]):
         self.folders = folders
@@ -213,6 +243,8 @@ class Library:
                         t = None
                     if t:
                         tracks[t.id] = t
+
+        _merge_compilations(tracks)
 
         albums: dict[str, Album] = {}
         for t in tracks.values():
