@@ -103,7 +103,7 @@ There is no automated test suite yet. The app is checked by running it, as descr
 
 ## Notes
 
-- **Licence:** none has been chosen yet. Until one is added, all rights are reserved, so please ask before reusing the code.
+- **Licence:** MIT, see [LICENSE](LICENSE). Use it, fork it and change it freely. The dependencies keep their own licences: `mutagen` is GPL-2.0-or-later, and the ffmpeg binary that `imageio-ffmpeg` installs is a GPL build, so check them before you ship a bundled copy.
 - **AI-assisted:** most of the code was written with an AI coding assistant (Claude Code) and reviewed by its author.
 - **Not included:** the repository contains no music, album art or YouTube audio. The screenshots use generated tones and invented artists. Your files stay on your machine.
 - **YouTube:** downloading audio from YouTube may conflict with YouTube's terms of service. Read them before you use this feature.
