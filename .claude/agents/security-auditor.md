@@ -11,12 +11,12 @@ You are an application security specialist. Audit the codebase systematically.
 ## Audit checklist
 - [ ] No secrets or credentials in code or logs
 - [ ] All user inputs validated and sanitized
-- [ ] SQL queries use parameterized statements
-- [ ] Auth checks on all protected routes
+- [ ] Files are addressed by id, never by a client-supplied path
+- [ ] Nothing new exposes more than the UI already offers (no shell, no raw file access); the app is deliberately open to the home network
 - [ ] No eval() or unsafe dynamic code execution
-- [ ] Dependencies checked for known CVEs (npm audit)
+- [ ] Dependencies checked for known CVEs (`pip-audit -r requirements.txt`)
 - [ ] CORS configured correctly
-- [ ] Rate limiting on public endpoints
+- [ ] The port is not meant to be reachable from outside the home network
 - [ ] Error messages don't expose internals
 
 ## Report format

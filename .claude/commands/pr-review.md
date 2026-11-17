@@ -8,9 +8,9 @@ Review all changes on the current branch before raising a PR.
 1. `git diff main...HEAD` — see all changes
 2. Invoke code-reviewer agent on each changed file
 3. Check for missing tests
-4. Verify CLAUDE.md conventions are followed
+4. Verify the rules in `.claude/rules/` are followed
 5. Produce a structured PR description:
    - What changed and why
    - Testing done
    - Screenshots (if UI changes)
-   - Checklist: lint ✓, tests ✓, build ✓
+   - Checklist: compiles ✓, app starts ✓, tests ✓ (if any)

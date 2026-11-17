@@ -1,28 +1,13 @@
 ---
 paths:
-  - "src/components/**"
-  - "app/**/*.tsx"
+  - "static/**"
 ---
 
-# Frontend Rules
+# Frontend rules
 
-## Components
-- Functional components only — no class components
-- One component per file
-- Props typed with TypeScript interfaces
-- No prop drilling past 2 levels — use context or a state store
-
-## State management
-- Local state: useState / useReducer
-- Global state: [your state library, e.g. Zustand]
-- No business logic in components — extract to hooks
-
-## Performance
-- Memoize expensive computations with useMemo
-- Stabilise callback references with useCallback
-- Lazy-load heavy components with React.lazy
-
-## Accessibility
-- All interactive elements keyboard-navigable
-- Images have meaningful alt text
-- Colour contrast meets WCAG AA minimum
+- Plain HTML, CSS and JavaScript. No npm, no bundler, no build step.
+- Call the server through `api()` in `app.js`. It turns a network failure into a readable message.
+- Escape any text that goes into `innerHTML` with `esc()`.
+- Change the speaker selection only through `toggleSpeaker()` and `syncGroup()`. The selection mirrors the group Sonos reports, and `adoptActualGroup()` keeps it that way.
+- Use `127.0.0.1`, not `localhost`, in any address the page builds.
+- Colours come from CSS variables. The accent colour is set at runtime from the cover art.

@@ -10,14 +10,14 @@ Perform a systematic security audit.
 - Authentication & authorisation
 - Input validation & sanitisation
 - Secret & credential handling
-- Dependency vulnerabilities (`npm audit`)
+- Dependency vulnerabilities (`pip-audit -r requirements.txt`)
 - Error handling (no info leakage)
-- Injection vulnerabilities (SQL, XSS, path traversal)
+- Injection vulnerabilities (command injection, XSS, path traversal)
 
 ## Findings format
 ```
 [SEVERITY] Title
-File: path/to/file.ts:line
+File: path/to/file.py:line
 Issue: What the vulnerability is
 Impact: What an attacker could do
 Fix: Specific remediation steps
