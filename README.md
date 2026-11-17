@@ -97,6 +97,12 @@ To keep the server running in the background on Windows, run `setup_autostart.ps
 
 The Python dependencies are listed in `requirements.txt`: FastAPI, uvicorn, SoCo, mutagen, imageio-ffmpeg (which bundles ffmpeg) and yt-dlp.
 
+## Documentation
+
+- [Architecture](docs/architecture.md): how the pieces fit, the decisions behind them, the data flow and the dependencies.
+- [config.example.json](config.example.json): the settings template you copy to `config.json`.
+- [LICENSE](LICENSE): the MIT licence.
+
 ## Tests
 
 There is no automated test suite yet. The app is checked by running it, as described above.
