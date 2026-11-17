@@ -34,6 +34,21 @@ flowchart LR
 | `radio.py` | Internet radio list stored in `radio.json` |
 | `static/app.js` | The UI: library views, player bar, queue drawer, speaker selection, YouTube and radio views |
 
+## REST API at a glance
+
+All endpoints are served by `app.py` on the same port as the UI. Indexes in the queue endpoints are 0-based.
+
+| Area | Endpoints |
+|---|---|
+| Health | `GET /api/health` answers `ok`, the address given to the speakers, the track count and the uptime. It touches no speaker, so it still answers when every speaker is off. |
+| Library | `GET /api/library`, `POST /api/library/rescan`, `GET /art/{album_id}` |
+| Audio | `GET /stream/{track_ref}`: what the speakers call |
+| Speakers | `GET /api/speakers`, `POST /api/speakers/group` |
+| Playback | `POST /api/play`, `/api/transport`, `/api/seek`, `/api/volume`, `/api/mute`, `/api/playmode`; `GET /api/state` |
+| Queue | `GET /api/queue`; `POST /api/queue/add`, `/jump`, `/remove`, `/move`, `/clear` |
+| YouTube | `POST /api/youtube`, `POST /api/youtube/fetch`, `GET /api/youtube`, `DELETE /api/youtube/{id}`, `GET /api/youtube/favourites`, `PUT /api/youtube/favourites/order`, `POST` and `DELETE /api/youtube/{id}/favourite`, `PUT /api/youtube/{id}/tags` |
+| Radio | `GET` and `POST /api/radio`, `PUT` and `DELETE /api/radio/{id}`, `POST /api/radio/{id}/play` |
+
 ## Key decisions
 
 | Decision | Why | Where |
@@ -49,9 +64,10 @@ flowchart LR
 | Store YouTube audio as a progressive m4a, with a JSON sidecar | YouTube serves fragmented MP4, which Sonos cannot read a duration from or seek in. The file is remuxed with the index up front and its real duration is probed. | `youtube.py` |
 | Retry YouTube downloads through other player clients on a bot check | The check is made against the server's own request. The fallback clients need neither an account nor a proof-of-origin token. | `youtube._download` |
 | Poll playback state once a second | The server holds no subscription to speaker events. Each poll runs on a shared pool with a 4 s limit, so one slow speaker cannot hold up requests. | `static/app.js` `pollState`, `sonos_ctl.state_with_timeout` |
+| Cap every UPnP request at 2 s to connect and 8 s to read | SoCo's default is 20 s per request and cannot be set per speaker, so one switched-off speaker used to stall the speaker list and the first page load. | `sonos_ctl.py`, top of the file |
 | Plain HTML, CSS and JavaScript, no build step | Nothing to install or compile, and the UI is readable as shipped. | `static/` |
 | Run in the background as a Scheduled Task that owns the process | A launcher that detaches gives Task Scheduler nothing to watch. The task starts `pythonw.exe` directly and re-checks every five minutes. `pythonw` has no stdout, so `app.py` points both streams at `logs/server.log`. | `setup_autostart.ps1`, `app.py` `_ensure_streams` |
-| No authentication | The server is meant for a trusted home network. See the limits below. | |
+| Open to everyone on the home network, with no sign-in | Anyone in the house can use it at any time, without an account or a password. The firewall rule in the README limits access to the local subnet. | `app.py` binds `0.0.0.0` |
 
 ## Data flow
 
@@ -109,8 +125,8 @@ sequenceDiagram
 | Sonos speakers | Play audio. They need UPnP on the local network and must be able to reach the laptop on port 8756. | n/a |
 | [FastAPI](https://fastapi.tiangolo.com/) and uvicorn | The web server and REST API | MIT, BSD-3-Clause |
 | [SoCo](https://github.com/SoCo/SoCo) | UPnP control of Sonos speakers | MIT |
-| [mutagen](https://mutagen.readthedocs.io/) | Reading tags and embedded cover art | GPL-2.0-or-later |
-| [imageio-ffmpeg](https://github.com/imageio/imageio-ffmpeg) | Ships an ffmpeg binary for the conversion and the m4a remux. It runs as a separate process. | BSD-2-Clause (the ffmpeg build is GPL) |
+| [mutagen](https://mutagen.readthedocs.io/) | Reading tags and embedded cover art | GPL-2.0-or-later, see [the notices](../THIRD_PARTY_NOTICES.md) |
+| [imageio-ffmpeg](https://github.com/imageio/imageio-ffmpeg) | Ships an ffmpeg binary for the conversion and the m4a remux. It runs as a separate process. | BSD-2-Clause. The ffmpeg build it installs may be GPL, see [the notices](../THIRD_PARTY_NOTICES.md). |
 | [yt-dlp](https://github.com/yt-dlp/yt-dlp) and yt-dlp-ejs | Downloading YouTube audio and solving YouTube's JavaScript challenges | yt-dlp: Unlicense. yt-dlp-ejs: Unlicense, MIT and ISC |
 | Node.js | The JavaScript runtime yt-dlp uses for those challenges. Install it separately. | n/a |
 | YouTube | Source of the audio. Subject to its terms of service. | n/a |
@@ -119,7 +135,7 @@ sequenceDiagram
 
 ## Limits
 
-- **No authentication.** Any device on the network can control the speakers, rescan the library, and make the laptop fetch a URL through yt-dlp. Keep the port closed to anything outside the local network.
+- **Keep it on the home network.** There is no sign-in on purpose, so anyone who can reach the port can use everything the UI offers, including rescanning the library and fetching YouTube audio. That is the point inside the house. Do not forward the port from the internet, and do not run it on a network you do not trust.
 - **The laptop must be awake.** Speakers fetch each track from the laptop as they play it, so if it sleeps, playback stops.
 - **Hi-res tracks cost one conversion.** The first play of a track above 24-bit or 48 kHz waits for ffmpeg; later plays use the cache.
 - **Windows is the home platform.** The server also starts on Linux, but the background setup is a Windows script.

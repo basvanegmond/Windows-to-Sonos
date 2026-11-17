@@ -18,7 +18,7 @@ It suits anyone with lossless FLAC or WAV files who does not want to convert the
 - **See what is really playing.** The selection mirrors the group Sonos reports, including changes made in the Sonos app.
 - **Play a YouTube video's audio without the video.** Paste a single video's link; the audio is cached for instant replay.
 - **Let the cover set the colour.** The accent colour is taken from the artwork of the album that is playing.
-- **Use it from any device on your network.** Open the laptop's address in a browser; there is no app to install.
+- **Let anyone in the house use it.** There is no sign-in and no app to install: anyone on your network opens the laptop's address in a browser.
 
 ## Screenshots
 
@@ -102,6 +102,7 @@ The Python dependencies are listed in `requirements.txt`: FastAPI, uvicorn, SoCo
 - [Architecture](docs/architecture.md): how the pieces fit, the decisions behind them, the data flow and the dependencies.
 - [config.example.json](config.example.json): the settings template you copy to `config.json`.
 - [LICENSE](LICENSE): the MIT licence.
+- [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md): the licences of the packages this project uses.
 
 ## Tests
 
@@ -109,7 +110,7 @@ There is no automated test suite yet. The app is checked by running it, as descr
 
 ## Notes
 
-- **Licence:** MIT, see [LICENSE](LICENSE). Use it, fork it and change it freely. The dependencies keep their own licences: `mutagen` is GPL-2.0-or-later, and the ffmpeg binary that `imageio-ffmpeg` installs is a GPL build, so check them before you ship a bundled copy.
+- **Licence:** MIT, see [LICENSE](LICENSE). Use it, fork it and change it freely. The dependencies keep their own licences, listed in [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).
 - **AI-assisted:** most of the code was written with an AI coding assistant (Claude Code) and reviewed by its author.
 - **Not included:** the repository contains no music, album art or YouTube audio. The screenshots use generated tones and invented artists. Your files stay on your machine.
 - **YouTube:** downloading audio from YouTube may conflict with YouTube's terms of service. Read them before you use this feature.
