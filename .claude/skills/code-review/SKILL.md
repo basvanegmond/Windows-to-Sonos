@@ -19,8 +19,8 @@ Perform a structured code review on the specified file(s) or diff.
 - Auth checks where required
 
 ### Performance
-- No N+1 queries
-- No unnecessary re-renders
+- No work that grows with library size inside the once-a-second state poll
+- Slow work (transcodes, YouTube downloads) is cached and not repeated per request
 - Heavy operations are async or cached
 
 ### Maintainability

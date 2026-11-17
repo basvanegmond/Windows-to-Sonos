@@ -1,10 +1,6 @@
 {
   "permissions": {
     "allow": [
-      "Bash(npm run lint)",
-      "Bash(npm run test*)",
-      "Bash(npm run build)",
-      "Bash(npx playwright test*)",
       "Bash(git diff*)",
       "Bash(git log*)",
       "Bash(git status)",
@@ -21,30 +17,6 @@
       "Bash(git push --force*)",
       "Bash(curl*)",
       "Bash(wget*)"
-    ]
-  },
-  "hooks": {
-    "PreToolUse": [
-      {
-        "matcher": "Bash",
-        "hooks": [
-          {
-            "type": "command",
-            "command": ".claude/hooks/pre-commit.sh"
-          }
-        ]
-      }
-    ],
-    "PostToolUse": [
-      {
-        "matcher": "Edit|Write",
-        "hooks": [
-          {
-            "type": "command",
-            "command": ".claude/hooks/lint-on-save.sh"
-          }
-        ]
-      }
     ]
   },
   "model": "claude-sonnet-4-6",

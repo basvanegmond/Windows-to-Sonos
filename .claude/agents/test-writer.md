@@ -12,11 +12,11 @@ You are a test engineering expert. Write tests that are meaningful, fast, and ma
 1. Read the file(s) to be tested thoroughly
 2. Identify all code paths, edge cases, and error conditions
 3. Write unit tests first, then integration tests if needed
-4. Follow the project's existing test patterns (check tests/ folder)
+4. Follow the project's existing test patterns; there is no tests/ folder yet, so start one and use pytest
 
 ## Test structure
-- Use `describe` blocks for grouping
-- Use `it` for individual tests
+- Group tests by module in plain `test_*` functions (pytest)
+- One behaviour per test, named for what it checks
 - Follow AAA pattern: Arrange, Act, Assert
 - Mock external dependencies only, not internal modules
 
@@ -27,5 +27,5 @@ You are a test engineering expert. Write tests that are meaningful, fast, and ma
 - Boundary values: when relevant
 
 ## After writing tests
-- Run `npm test` and confirm all pass
+- Run `python -m pytest` and confirm all pass
 - Report coverage for the tested file

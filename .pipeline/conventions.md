@@ -1,7 +1,7 @@
-# CLAUDE.md
+# Pipeline conventions
 
-This file configures Claude Code behaviour for this project.
-It is read automatically at the start of every Claude Code session.
+Rules and reference for the delivery pipeline in this folder.
+The `/ship` command is defined in `.claude/commands/ship.md`.
 
 ---
 

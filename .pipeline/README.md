@@ -52,4 +52,4 @@ The Reviewer issues one of three verdicts in `review.md`:
 ## Changing models
 
 Edit the `model:` field in the relevant agent `.md` file.
-Current assignments are in `CLAUDE.md` at project root.
+Current assignments are in `conventions.md` in this folder.

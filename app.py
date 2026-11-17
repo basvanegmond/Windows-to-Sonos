@@ -25,6 +25,10 @@ BASE_DIR = Path(__file__).parent
 CONFIG_PATH = BASE_DIR / "config.json"
 
 try:
+    if not CONFIG_PATH.exists():
+        raise FileNotFoundError(
+            f"{CONFIG_PATH.name} not found. Copy config.example.json to "
+            f"{CONFIG_PATH.name}, then set music_folders and your speakers.")
     config = json.loads(CONFIG_PATH.read_text(encoding="utf-8"))
     library = Library(config["music_folders"])
     sonos = SonosController(config["speakers"], config["port"])
