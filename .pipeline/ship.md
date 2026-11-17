@@ -4,7 +4,7 @@ Agent: Multi-Agent Software Delivery Pipeline
 version: 1.0.0
 description: |
   Orchestrates the 4-agent pipeline: Planner → Coder → Tester → Reviewer.
-  Triggered by the /ship slash command defined in CLAUDE.md.
+  Triggered by the /ship slash command defined in `.claude/commands/ship.md`.
   Each agent runs only if the previous step completed successfully.
 created: (set at runtime)
 
