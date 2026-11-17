@@ -31,7 +31,7 @@ It suits anyone with lossless FLAC or WAV files who does not want to convert the
 
 ## Try it in two minutes
 
-You need Python 3.13 and a folder of music. The commands below were run on Linux; the Windows commands use the same steps with Windows paths.
+You need Python 3.13 and a folder of music. For the YouTube feature you also need Node.js on your PATH, which yt-dlp uses to solve YouTube's JavaScript checks. The commands below were run on Linux; the Windows commands use the same steps with Windows paths.
 
 ```bash
 git clone https://github.com/basvanegmond/Windows-to-Sonos.git
@@ -42,7 +42,7 @@ python3.13 -m venv .venv
 
 On Windows, use `py -3.13 -m venv .venv` and `.venv\Scripts\python.exe -m pip install -r requirements.txt`.
 
-There is no build step. Before you start the server, edit `config.json`: set `music_folders` to your music, and list your speakers with a name and an IP address. You can find the IPs in your router or in the Sonos app; reserve them in the router so they do not change.
+There is no build step. Before you start the server, copy the template to your own settings file (`cp config.example.json config.json`, or `Copy-Item config.example.json config.json` in PowerShell) and edit it: set `music_folders` to your music, and list your speakers with a name and an IP address. You can find the IPs in your router or in the Sonos app; reserve them in the router so they do not change. `config.json` is ignored by git, so your settings stay on your machine.
 
 ```bash
 .venv/bin/python app.py
@@ -74,6 +74,7 @@ To keep the server running in the background on Windows, run `setup_autostart.ps
 | Symptom | What to do |
 |---|---|
 | A speaker stays silent, but the track shows | Check the firewall rule above. |
+| The server stops with "config.json not found" | Copy `config.example.json` to `config.json` and edit it. |
 | A speaker shows as offline | Check its IP in `config.json`, and reserve it in your router. |
 | New music does not appear | Click **Rescan Library** in the sidebar. |
 | "Can't reach the server" in the page | The laptop is asleep, the server is restarting, or the device is off the network. |
@@ -86,6 +87,7 @@ To keep the server running in the background on Windows, run `setup_autostart.ps
 |---|---|
 | `app.py` | FastAPI server: the REST API, audio streaming with range requests, album art |
 | `library.py` | Scans the music folders, reads tags, groups tracks into albums |
+| `config.example.json` | Template for your own `config.json`: port, music folders, speakers |
 | `sonos_ctl.py` | Controls the speakers over UPnP with SoCo: grouping, queue, playback |
 | `transcoder.py` | Converts files Sonos cannot play to FLAC with ffmpeg, and caches them |
 | `youtube.py` | Fetches YouTube audio with yt-dlp, caches it, keeps the favourites |

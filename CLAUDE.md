@@ -12,7 +12,7 @@
 - **Owner**: Bas van Egmond
 
 ## How It Works
-1. FastAPI backend scans `music_folders` (see `config.json`) with mutagen.
+1. FastAPI backend scans `music_folders` (see `config.json`, copied from `config.example.json`) with mutagen.
 2. Browser UI (vanilla JS, served from `static/`) browses albums and controls playback.
 3. Playback commands go over UPnP AVTransport (SoCo library) straight to a
    speaker's IP. The speaker then **pulls** the audio from this laptop over
@@ -35,7 +35,7 @@
 - `sonos_ctl.py`  — SoCo wrapper: grouping, DIDL metadata, queue, transport, state
 - `transcoder.py` — hi-res detection + cached ffmpeg transcode (24/48 FLAC)
 - `youtube.py`    — yt-dlp audio fetch (m4a) + thumbnail, cached in `.cache/youtube/`
-- `config.json`   — port (8756), music folders, speaker names + IPs
+- `config.example.json` — template; copy to `config.json` (git-ignored, local) for port (8756), music folders, speaker names + IPs
 - `static/`       — index.html, styles.css, app.js (the whole UI)
 
 ## YouTube Streaming
@@ -147,7 +147,7 @@
 ## Coding Conventions
 - Python: type hints, small focused modules, no framework magic
 - Frontend: vanilla JS only — no npm, no build step, keep it that way
-- No secrets anywhere; config lives in `config.json` (LAN IPs only, not sensitive)
+- No secrets anywhere; local settings live in `config.json` (git-ignored; the tracked template is `config.example.json`)
 
 ## Skill Discovery via NotebookLM
 Before starting any multi-step task, or when the user requests a structured workflow (writing, analysis, coding, legal, finance, OKRs, design, presentations, etc.), query the NotebookLM MCP to find the most relevant skill.

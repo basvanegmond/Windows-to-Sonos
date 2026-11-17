@@ -1,0 +1,8 @@
+{
+  "port": 8756,
+  "music_folders": ["C:\\Users\\YourName\\Music"],
+  "speakers": [
+    { "name": "Living Room", "ip": "192.168.1.50" },
+    { "name": "Kitchen", "ip": "192.168.1.51" }
+  ]
+}

@@ -11,3 +11,6 @@ dist/
 .DS_Store
 .claude/settings.local.json
 .claude/agent-memory/
+
+# Local settings: copy config.example.json to config.json and edit it
+config.json
